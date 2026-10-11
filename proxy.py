@@ -643,8 +643,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         if (!block || !profile) return;
         const name = (profile.model_name && profile.model_name !== profile.model)
             ? profile.model_name : profile.model;
-        const ctx = (profile.context && profile.context !== '—')
-            ? '<p><strong>Доступный Контекст:</strong> <strong>' + profile.context + '</strong></p>' : '';
+        // Обе величины в одну строку; пропускаем те, которых нет в каталоге
+        const tokens = [profile.context, profile.output].filter(v => v && v !== '—');
+        const tokensHtml = tokens.length
+            ? '<p><strong>Контекст / Выход:</strong> <strong>' + tokens.join(' / ') + '</strong> токенов</p>' : '';
         const valStyle = 'profile-val';
         const provName = profile.provider_name
             ? '<span class="' + valStyle + '">' + profile.provider_name + '</span>' +
@@ -660,7 +662,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             '</p>' +
             '<p><strong>Провайдер (Хост):</strong> ' + provName + '</p>' +
             '<p><strong>Тег провайдера:</strong> ' + tagDisplay + '</p>' +
-            ctx +
+            tokensHtml +
             '<p><strong>Цена фиксации (за 1М токенов):</strong> ' +
             'Вх: <span style="color:#28a745;font-weight:bold;">' + profile.prompt + ' ₽</span> | ' +
             'Вых: <span style="color:#28a745;font-weight:bold;">' + profile.completion + ' ₽</span> | ' +
@@ -763,6 +765,21 @@ def format_variable_pricings(variable_pricings, provider_name="", provider_tag="
                     </tr>''')
     
     return "".join(rows)
+
+
+def format_tokens(value):
+    """Форматирует количество токенов компактно: 1048576 → «1048K», 8192 → «8K».
+
+    Значения меньше 1000 показываются как есть — иначе при делении на 1000
+    они превращались бы в «0K». Пусто/ноль → «—».
+    """
+    try:
+        v = int(value or 0)
+    except (TypeError, ValueError):
+        return "—"
+    if v <= 0:
+        return "—"
+    return f"{v // 1000}K" if v >= 1000 else str(v)
 
 
 def format_price_cell(ep, price_key):
@@ -897,15 +914,22 @@ def render_html(settings, catalog_data):
         model_name = get_model_display_name(settings["selected_model"], catalog_data)
         selected_ep = get_selected_endpoint(settings["selected_model"], settings["selected_provider"], catalog_data)
         context_len = selected_ep.get("context_length") or 0
+        output_len = selected_ep.get("max_completion_tokens") or 0
         provider_name = selected_ep.get("provider_name") or ""
         quantization = selected_ep.get("quantization") or ""
         prov_display = f'<span class="profile-val">{provider_name}</span>' if provider_name else ""
         if quantization:
             prov_display += f' <small style="color:gray;">{quantization}</small>'
         tag_display = f'<span class="profile-val">{settings["selected_provider"]}</span>'
+        # Обе величины в одну строку; пропускаем те, которых нет в каталоге
+        tokens_display = " / ".join(
+            t for t in (format_tokens(context_len), format_tokens(output_len)) if t != "—"
+        )
         extra_prices = format_extra_prices(selected_ep, inline=True)
         extra_html = f'<p><strong>Дополнительно:</strong><br>{extra_prices}</p>' if extra_prices else ''
-        context_html = f'<p><strong>Доступный Контекст:</strong> <strong>{context_len // 1000}K</strong> токенов</p>' if context_len else ''
+        context_html = (f'<p><strong>Контекст / Выход:</strong> '
+                        f'<strong>{tokens_display}</strong> токенов</p>'
+                        if tokens_display else '')
         links_html = f'''
             <p style="margin-top: 8px;">
                 <a href="https://routerai.ru/models/{settings["selected_model"]}" target="_blank" style="font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
@@ -964,7 +988,7 @@ def render_html(settings, catalog_data):
                     <tr>
                         <th>Провайдер (Хост)</th>
                         <th>Тег провайдера</th>
-                        <th>Доступный Контекст</th>
+                        <th>Контекст / Выход</th>
                         <th>Тариф</th>
                         <th style="text-align: right;">Вход (₽/1М)</th>
                         <th style="text-align: right;">Выход (₽/1М)</th>
@@ -982,6 +1006,10 @@ def render_html(settings, catalog_data):
             ) else ""
             vp_rows = format_variable_pricings(ep.get("variable_pricings"), ep.get("provider_name", ""), ep.get("tag", ""))
             extra_prices = format_extra_prices(ep)
+            tokens_display = " / ".join(
+                t for t in (format_tokens(ep.get("context_length")),
+                            format_tokens(ep.get("max_completion_tokens"))) if t != "—"
+            ) or "—"
             catalog_html += f'''
                     <tr class="provider-row"{selected_style}
                         data-context-raw="{ep.get("context_length") or 0}"
@@ -990,7 +1018,7 @@ def render_html(settings, catalog_data):
                         data-cache="{(ep.get("pricing") or {}).get("input_cache_read", 0) * 1000000}">
                         <td><strong>{ep.get("provider_name", "")}</strong> <small style="color:gray;">{ep.get("quantization", "")}</small></td>
                         <td><code>{ep.get("tag", "")}</code></td>
-                        <td><strong>{(ep.get("context_length") or 0) // 1000}K</strong> токенов</td>
+                        <td><strong>{tokens_display}</strong> токенов</td>
                         <td style="text-align: center; font-size: 14px;">Базовый</td>
                         <td style="text-align: right; font-size: 14px;">{format_price_cell(ep, "prompt")}</td>
                         <td style="text-align: right; font-size: 14px;">{format_price_cell(ep, "completion")}</td>
@@ -1534,7 +1562,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     <tr>
                         <th>Провайдер (Хост)</th>
                         <th>Тег провайдера</th>
-                        <th>Доступный Контекст</th>
+                        <th>Контекст / Выход</th>
                         <th>Тариф</th>
                         <th style="text-align: right;">Вход (₽/1М)</th>
                         <th style="text-align: right;">Выход (₽/1М)</th>
@@ -1552,6 +1580,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     ) else ""
                     vp_rows = format_variable_pricings(ep.get("variable_pricings"), ep.get("provider_name", ""), ep.get("tag", ""))
                     extra_prices = format_extra_prices(ep)
+                    tokens_display = " / ".join(
+                        t for t in (format_tokens(ep.get("context_length")),
+                                    format_tokens(ep.get("max_completion_tokens"))) if t != "—"
+                    ) or "—"
                     catalog_html += f'''
                     <tr class="provider-row"{selected_style}
                         data-context-raw="{ep.get("context_length") or 0}"
@@ -1560,7 +1592,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         data-cache="{(ep.get("pricing") or {}).get("input_cache_read", 0) * 1000000}">
                         <td><strong>{ep.get("provider_name", "")}</strong> <small style="color:gray;">{ep.get("quantization", "")}</small></td>
                         <td><code>{ep.get("tag", "")}</code></td>
-                        <td><strong>{(ep.get("context_length") or 0) // 1000}K</strong> токенов</td>
+                        <td><strong>{tokens_display}</strong> токенов</td>
                         <td style="text-align: center; font-size: 14px;">Базовый</td>
                         <td style="text-align: right; font-size: 14px;">{format_price_cell(ep, "prompt")}</td>
                         <td style="text-align: right; font-size: 14px;">{format_price_cell(ep, "completion")}</td>
@@ -1683,6 +1715,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             model_name = get_model_display_name(model_id, cached)
             selected_ep = get_selected_endpoint(model_id, provider_tag, cached)
             context_len = selected_ep.get("context_length") or 0
+            output_len = selected_ep.get("max_completion_tokens") or 0
             provider_name = selected_ep.get("provider_name") or ""
             quantization = selected_ep.get("quantization") or ""
             self.send_response(200)
@@ -1697,7 +1730,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "provider": provider_tag,
                     "provider_name": provider_name,
                     "quantization": quantization,
-                    "context": f"{context_len // 1000}K токенов" if context_len else "—",
+                    "context": format_tokens(context_len),
+                    "output": format_tokens(output_len),
                     "extra_prices": format_extra_prices(selected_ep, inline=True),
                     "prompt": f"{prompt * 1000000:.2f}",
                     "completion": f"{completion * 1000000:.2f}",
