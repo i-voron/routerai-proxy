@@ -58,6 +58,48 @@ def save_settings(data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+# Ссылка на переменную окружения в настройках: {env:ИМЯ_ПЕРЕМЕННОЙ}
+ENV_REF_RE = re.compile(r"\s*\{env:\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\s*")
+
+
+def resolve_env_refs(value):
+    """Разворачивает в настройках ссылки вида {env:ИМЯ_ПЕРЕМЕННОЙ}.
+
+    Позволяет хранить секреты (например api_key) в переменных окружения,
+    а не в файле настроек. Обычные значения возвращаются без изменений.
+    Если переменная не найдена — возвращается пустая строка.
+    """
+    if not isinstance(value, str):
+        return value
+    m = ENV_REF_RE.fullmatch(value)
+    if m:
+        return os.environ.get(m.group(1), "")
+    return value
+
+
+def resolve_api_key(settings):
+    """Возвращает кортеж (ключ, сообщение_об_ошибке).
+
+    Ключ разворачивается из {env:...} при необходимости. Сообщение об ошибке
+    заполнено только когда ключ использовать нельзя — и если причина в
+    ненайденной переменной окружения, в тексте будет её имя.
+    """
+    raw = settings.get("api_key", "") or ""
+    key = resolve_env_refs(raw)
+    if key and key != "ВАШ_API_КЛЮЧ_ЗДЕСЬ":
+        # Похоже на ссылку, но не разобралось — иначе уйдёт в RouterAI буквально
+        if key.strip().startswith("{env:"):
+            return key, (f"Некорректная ссылка на переменную окружения: {key.strip()} "
+                         f"Ожидается формат {{env:ИМЯ_ПЕРЕМЕННОЙ}} — латиницей, "
+                         f"цифрами и знаком подчёркивания.")
+        return key, None
+    m = ENV_REF_RE.fullmatch(raw)
+    if m:
+        return key, (f"Переменная окружения {m.group(1)} не найдена. "
+                     f"Задайте её в окружении, из которого запущен прокси.")
+    return key, "API ключ не настроен! Укажите его в настройках."
+
+
 def get_port():
     """Возвращает порт прокси из настроек (по умолчанию 5000)."""
     try:
@@ -1810,10 +1852,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_openai_error(400, "Провайдер не выбран в веб-панели управления!")
             return
 
-        api_key = settings.get("api_key", "")
-        if not api_key or api_key == "ВАШ_API_КЛЮЧ_ЗДЕСЬ":
-            write_log("Прокси", "Отклонено: API ключ не настроен")
-            self.send_openai_error(401, "API ключ не настроен! Укажите его в настройках.", err_type="authentication_error", code="invalid_api_key")
+        api_key, key_error = resolve_api_key(settings)
+        if key_error:
+            # Не логируем сам ключ — только причину (и имя переменной, если ссылка)
+            write_log("Прокси", f"Отклонено: {key_error}")
+            self.send_openai_error(401, key_error, err_type="authentication_error", code="invalid_api_key")
             return
 
         final_model = f"{settings['selected_model']}@provider={settings['selected_provider']}&allow_fallbacks=false"
@@ -2032,6 +2075,13 @@ if __name__ == "__main__":
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     print(f"Прокси-сервер запущен на {get_base_url()}")
+
+    # Предупреждаем о нерабочем ключе сразу, а не при первом запросе из OpenCode
+    _key, _key_error = resolve_api_key(load_settings())
+    if _key_error and "Переменная окружения" in _key_error:
+        write_log("Прокси", f"Внимание: {_key_error}")
+        # write_log молчит при выключенном логировании — дублируем в консоль
+        print(f"[Внимание] {_key_error}")
 
     # Запрашиваем открытие страницы
     prompt_open_browser()
