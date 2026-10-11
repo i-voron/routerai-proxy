@@ -1,0 +1,19 @@
+{
+  "api_key": "ВАШ_API_КЛЮЧ_ЗДЕСЬ",
+  "port": 5000,
+  "selected_model": null,
+  "selected_provider": null,
+  "frozen_prices": {},
+  "is_blocked": false,
+  "block_reason": "",
+  "check_interval_sec": 600,
+  "filter_context": "",
+  "filter_model_id": "",
+  "filter_input_price": "",
+  "filter_output_price": "",
+  "filter_cache_price": "",
+  "logging_enabled": true,
+  "auto_open_on_block": false,
+  "opencode_config_path": "",
+  "opencode_config_allow_replace": false
+}
