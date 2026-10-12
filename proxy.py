@@ -255,9 +255,6 @@ def price_monitor_loop():
             time.sleep(600)
 
 
-monitor_thread = threading.Thread(target=price_monitor_loop, daemon=True)
-monitor_thread.start()
-
 # --- ВЕБ-ИНТЕРФЕЙС УПРАВЛЕНИЯ С ТОЧЕЧНЫМИ ФИЛЬТРАМИ ПРОВАЙДЕРОВ ---
 # Шаблон панели вынесен в отдельный файл, чтобы логика и представление
 # не мешались друг другу. Плейсхолдеры <!-- XXX --> подставляются в render_html.
@@ -721,6 +718,66 @@ def fetch_catalog():
     return catalog_data
 
 
+def patch_opencode_config(text: str, port: int, new_context: int, new_output: int):
+    """Правит порт и лимиты в тексте конфига OpenCode, ничего больше не трогая.
+
+    Возвращает (новый_текст, список_изменений, найдены_ли_ключи).
+    Правка текстовая: комментарии, отступы и остальные настройки сохраняются.
+    """
+    # --- Правка порта в baseURL (по нашей подписи 127.0.0.1:<port>/v1) ---
+    port_changed = False
+    old_port = None
+    m = re.search(r'("baseURL"\s*:\s*"http://127\.0\.0\.1)(?::(\d+))?(/v1")', text)
+    if m:
+        old_port = int(m.group(2)) if m.group(2) else 80
+        if old_port != port:
+            text = text[:m.start()] + m.group(1) + f":{port}" + m.group(3) + text[m.end():]
+            port_changed = True
+
+    # --- Правка лимитов внутри блока нашей модели ---
+    limits_changed = False
+    old_ctx = old_out = None
+    key_idx = text.find('"routerai/proxy-model"')
+    if key_idx != -1:
+        window_end = min(key_idx + 1500, len(text))
+        window = text[key_idx:window_end]
+        lm = re.search(r'"limit"\s*:\s*\{', window)
+        if lm:
+            brace_start = key_idx + lm.end() - 1
+            brace_end = window.find("}", lm.end() - 1)
+            if brace_end != -1:
+                abs_end = key_idx + brace_end
+                block = text[brace_start:abs_end + 1]
+
+                new_block = block
+                cm = re.search(r'"context"\s*:\s*(\d+)', new_block)
+                if cm:
+                    old_ctx = int(cm.group(1))
+                    new_block = (new_block[:cm.start()] + f'"context": {new_context}'
+                                 + new_block[cm.end():])
+                om = re.search(r'"output"\s*:\s*(\d+)', new_block)
+                if om:
+                    old_out = int(om.group(1))
+                    new_block = (new_block[:om.start()] + f'"output": {new_output}'
+                                 + new_block[om.end():])
+
+                if new_block != block:
+                    text = text[:brace_start] + new_block + text[abs_end + 1:]
+                    limits_changed = True
+
+    changes = []
+    if port_changed:
+        changes.append(f"порт {old_port} → {port}")
+    if limits_changed:
+        if old_ctx is not None and old_ctx != new_context:
+            changes.append(f"context {old_ctx} → {new_context}")
+        if old_out is not None and old_out != new_output:
+            changes.append(f"output {old_out} → {new_output}")
+
+    found_any = (m is not None) or (key_idx != -1)
+    return text, changes, found_any
+
+
 class ProxyHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
@@ -945,48 +1002,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 text = f.read()
             original = text
 
-            # --- Правка порта в baseURL (по нашей подписи 127.0.0.1:<port>/v1) ---
-            port_changed = False
-            old_port = None
-            m = re.search(r'("baseURL"\s*:\s*"http://127\.0\.0\.1)(?::(\d+))?(/v1")', text)
-            if m:
-                old_port = int(m.group(2)) if m.group(2) else 80
-                if old_port != port:
-                    text = text[:m.start()] + m.group(1) + f":{port}" + m.group(3) + text[m.end():]
-                    port_changed = True
+            new_text, changes, found_any = patch_opencode_config(text, port, new_context, new_output)
 
-            # --- Правка лимитов внутри блока нашей модели ---
-            limits_changed = False
-            old_ctx = old_out = None
-            key_idx = text.find('"routerai/proxy-model"')
-            if key_idx != -1:
-                window_end = min(key_idx + 1500, len(text))
-                window = text[key_idx:window_end]
-                lm = re.search(r'"limit"\s*:\s*\{', window)
-                if lm:
-                    brace_start = key_idx + lm.end() - 1
-                    brace_end = window.find("}", lm.end() - 1)
-                    if brace_end != -1:
-                        abs_end = key_idx + brace_end
-                        block = text[brace_start:abs_end + 1]
-
-                        new_block = block
-                        cm = re.search(r'"context"\s*:\s*(\d+)', new_block)
-                        if cm:
-                            old_ctx = int(cm.group(1))
-                            new_block = (new_block[:cm.start()] + f'"context": {new_context}'
-                                         + new_block[cm.end():])
-                        om = re.search(r'"output"\s*:\s*(\d+)', new_block)
-                        if om:
-                            old_out = int(om.group(1))
-                            new_block = (new_block[:om.start()] + f'"output": {new_output}'
-                                         + new_block[om.end():])
-
-                        if new_block != block:
-                            text = text[:brace_start] + new_block + text[abs_end + 1:]
-                            limits_changed = True
-
-            found_any = (m is not None) or (key_idx != -1)
             if not found_any:
                 self._send_json({
                     "status": "ok",
@@ -994,7 +1011,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 })
                 return
 
-            if text == original:
+            if new_text == original:
                 self._send_json({"status": "ok", "message": "Уже актуально, изменений не требуется"})
                 return
 
@@ -1003,16 +1020,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if not os.path.exists(backup_path):
                 atomic_write(backup_path, original)
 
-            atomic_write(cfg_path, text)
-
-            changes = []
-            if port_changed:
-                changes.append(f"порт {old_port} → {port}")
-            if limits_changed:
-                if old_ctx is not None and old_ctx != new_context:
-                    changes.append(f"context {old_ctx} → {new_context}")
-                if old_out is not None and old_out != new_output:
-                    changes.append(f"output {old_out} → {new_output}")
+            atomic_write(cfg_path, new_text)
 
             msg = "Обновлено: " + ", ".join(changes) if changes else "Обновлено"
             write_log("Прокси", f"Конфиг OpenCode обновлён ({cfg_path}): {msg}; бэкап: {backup_path}")
@@ -1619,6 +1627,11 @@ def kill_existing_instances():
 
 if __name__ == "__main__":
     PORT = get_port()
+
+    # Фоновый монитор цен. Живёт здесь, а не на уровне модуля: иначе импорт
+    # proxy.py (например, из тестов) поднимал бы лишний поток.
+    monitor_thread = threading.Thread(target=price_monitor_loop, daemon=True)
+    monitor_thread.start()
 
     # Снимаем ранее запущенные экземпляры, чтобы освободить порт
     kill_existing_instances()
