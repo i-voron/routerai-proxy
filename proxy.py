@@ -22,6 +22,9 @@ ROUTERAI_BASE_URL = "https://routerai.ru/api/v1"
 log_lock = threading.Lock()
 # Блокировка для потокобезопасной записи кэша каталога
 cache_lock = threading.Lock()
+# Блокировка для чтения-записи настроек: монитор цен и HTTP-обработчики
+# работают в разных потоках и оба трогают proxy_settings.json
+settings_lock = threading.RLock()
 
 default_settings = {
     "api_key": "ВАШ_API_КЛЮЧ_ЗДЕСЬ",
@@ -59,16 +62,30 @@ def atomic_write(path: str, data: str) -> None:
     os.replace(tmp_path, path)
 
 
+def update_settings(mutator):
+    """Читает настройки, применяет изменение и сохраняет под одной блокировкой.
+
+    Отдельные load + save терпят гонку: два потока прочитают одно состояние,
+    каждый поменяет своё поле, и последний save перезапишет чужую правку.
+    """
+    with settings_lock:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+        else:
+            settings = dict(default_settings)
+        mutator(settings)
+        atomic_write(SETTINGS_FILE, json.dumps(settings, indent=2, ensure_ascii=False))
+        return settings
+
+
 def load_settings():
-    if not os.path.exists(SETTINGS_FILE):
-        atomic_write(SETTINGS_FILE, json.dumps(default_settings, indent=2, ensure_ascii=False))
-        return default_settings
-    with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_settings(data):
-    atomic_write(SETTINGS_FILE, json.dumps(data, indent=2, ensure_ascii=False))
+    with settings_lock:
+        if not os.path.exists(SETTINGS_FILE):
+            atomic_write(SETTINGS_FILE, json.dumps(default_settings, indent=2, ensure_ascii=False))
+            return default_settings
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
 
 
 # Ссылка на переменную окружения в настройках: {env:ИМЯ_ПЕРЕМЕННОЙ}
@@ -210,11 +227,13 @@ def price_monitor_loop():
                                     if vp.get("input_cache_read", 0) > frozen_vp.get("input_cache_read", 0):
                                         changes.append(f"От {vp.get('threshold', 0)//1000}K Кэш: {frozen_vp['input_cache_read']*1e6:.2f}→{vp['input_cache_read']*1e6:.2f}₽")
 
-                            settings["is_blocked"] = True
-                            settings["block_reason"] = "ЦЕНА ВЫРОСЛА! " + "; ".join(changes)
-                            settings["price_changes"] = changes
-                            save_settings(settings)
-                            write_log("Монитор", settings["block_reason"])
+                            reason = "ЦЕНА ВЫРОСЛА! " + "; ".join(changes)
+                            update_settings(lambda s: (
+                                s.__setitem__("is_blocked", True),
+                                s.__setitem__("block_reason", reason),
+                                s.__setitem__("price_changes", changes),
+                            ))
+                            write_log("Монитор", reason)
         except Exception as e:
             print(f"Ошибка мониторинга цен: {e}")
 
@@ -773,9 +792,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             params = parse_qs(body)
             enabled = params.get("enabled", ["false"])[0].lower() == "true"
 
-            settings = load_settings()
-            settings["auto_open_on_block"] = enabled
-            save_settings(settings)
+            update_settings(lambda s: s.__setitem__("auto_open_on_block", enabled))
             write_log("Прокси", f"Авто-открытие при блокировке: {'включено' if enabled else 'выключено'}")
 
             self.send_response(200)
@@ -801,9 +818,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             params = parse_qs(body)
             enabled = params.get("enabled", ["false"])[0].lower() == "true"
 
-            settings = load_settings()
-            settings["logging_enabled"] = enabled
-            save_settings(settings)
+            update_settings(lambda s: s.__setitem__("logging_enabled", enabled))
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -846,9 +861,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             params = parse_qs(self.rfile.read(content_length).decode("utf-8"))
             enabled = params.get("enabled", ["false"])[0].lower() == "true"
 
-            settings = load_settings()
-            settings["opencode_config_allow_replace"] = enabled
-            save_settings(settings)
+            update_settings(lambda s: s.__setitem__("opencode_config_allow_replace", enabled))
             write_log("Прокси", f"Разрешение на правку конфига OpenCode: {'включено' if enabled else 'выключено'}")
             self._send_json({"status": "ok", "allow_replace": enabled})
         except (BrokenPipeError, ConnectionResetError):
@@ -863,9 +876,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             params = parse_qs(self.rfile.read(content_length).decode("utf-8"))
             path = (params.get("path", [""])[0] or "").strip()
 
-            settings = load_settings()
-            settings["opencode_config_path"] = path
-            save_settings(settings)
+            update_settings(lambda s: s.__setitem__("opencode_config_path", path))
             write_log("Прокси", f"Путь к конфигу OpenCode: {path or '(очищен)'}")
             self._send_json({"status": "ok", "path": path})
         except (BrokenPipeError, ConnectionResetError):
@@ -1211,13 +1222,6 @@ class ProxyHandler(BaseHTTPRequestHandler):
             completion = float(params.get("completion", ["0"])[0])
             cache = float(params.get("cache", ["0"])[0])
 
-            # Сохраняем параметры фильтрации
-            settings["filter_model_id"] = params.get("filter_model_id", [""])[0]
-            settings["filter_context"] = params.get("filter_context", [""])[0]
-            settings["filter_input_price"] = params.get("filter_input_price", [""])[0]
-            settings["filter_output_price"] = params.get("filter_output_price", [""])[0]
-            settings["filter_cache_price"] = params.get("filter_cache_price", [""])[0]
-
             # Валидация: проверяем, что провайдер существует в каталоге
             url = f"{ROUTERAI_BASE_URL}/models/{model_id}/endpoints"
             req = urllib.request.Request(url, headers={"User-Agent": "RouterAI-Proxy/1.0"})
@@ -1241,19 +1245,32 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # Находим выбранный endpoint для сохранения variable_pricings
             selected_ep = next((ep for ep in endpoints if ep.get("tag") == provider_tag), None)
             variable_pricings = (selected_ep or {}).get("variable_pricings") or []
+            cache_write = float((selected_ep or {}).get("pricing", {}).get("input_cache_write", 0))
 
-            settings["selected_model"] = model_id
-            settings["selected_provider"] = provider_tag
-            settings["frozen_prices"] = {
-                "prompt": prompt,
-                "completion": completion,
-                "input_cache_read": cache,
-                "input_cache_write": float((selected_ep or {}).get("pricing", {}).get("input_cache_write", 0)),
-                "variable_pricings": variable_pricings
+            chosen = {
+                "filter_model_id": params.get("filter_model_id", [""])[0],
+                "filter_context": params.get("filter_context", [""])[0],
+                "filter_input_price": params.get("filter_input_price", [""])[0],
+                "filter_output_price": params.get("filter_output_price", [""])[0],
+                "filter_cache_price": params.get("filter_cache_price", [""])[0],
+                "selected_model": model_id,
+                "selected_provider": provider_tag,
+                "frozen_prices": {
+                    "prompt": prompt,
+                    "completion": completion,
+                    "input_cache_read": cache,
+                    "input_cache_write": cache_write,
+                    "variable_pricings": variable_pricings
+                },
+                # Выбор провайдера — это явное принятие текущих цен
+                "is_blocked": False,
+                "block_reason": "",
             }
-            settings["is_blocked"] = False
-            settings["block_reason"] = ""
-            save_settings(settings)
+
+            def apply_choice(s):
+                s.update(chosen)
+
+            update_settings(apply_choice)
 
             # Возвращаем обновленные данные профиля
             cached = load_catalog_cache()
@@ -1321,9 +1338,27 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         }
                 except Exception as e:
                     print(e)
-            settings["is_blocked"] = False
-            settings["block_reason"] = ""
-            save_settings(settings)
+            def lift_block(s):
+                s["is_blocked"] = False
+                s["block_reason"] = ""
+                # Цены перечитываем из каталога: снятие блокировки — это
+                # согласие с текущими ценами, поэтому они становятся эталоном
+                try:
+                    cached = load_catalog_cache()
+                    selected_ep = get_selected_endpoint(s.get("selected_model"), s.get("selected_provider"), cached)
+                    if selected_ep:
+                        prices = selected_ep.get("pricing") or {}
+                        s["frozen_prices"] = {
+                            "prompt": prices.get("prompt", 0),
+                            "completion": prices.get("completion", 0),
+                            "input_cache_read": prices.get("input_cache_read", 0),
+                            "input_cache_write": prices.get("input_cache_write", 0),
+                            "variable_pricings": selected_ep.get("variable_pricings") or []
+                        }
+                except Exception as e:
+                    write_log("Прокси", f"Не удалось перечитать цены при снятии блокировки: {e}")
+
+            update_settings(lift_block)
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
@@ -1337,13 +1372,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length).decode("utf-8")
             params = parse_qs(body)
 
-            settings = load_settings()
-            settings["filter_model_id"] = params.get("filter_model_id", [""])[0]
-            settings["filter_context"] = params.get("filter_context", [""])[0]
-            settings["filter_input_price"] = params.get("filter_input_price", [""])[0]
-            settings["filter_output_price"] = params.get("filter_output_price", [""])[0]
-            settings["filter_cache_price"] = params.get("filter_cache_price", [""])[0]
-            save_settings(settings)
+            filters = {
+                "filter_model_id": params.get("filter_model_id", [""])[0],
+                "filter_context": params.get("filter_context", [""])[0],
+                "filter_input_price": params.get("filter_input_price", [""])[0],
+                "filter_output_price": params.get("filter_output_price", [""])[0],
+                "filter_cache_price": params.get("filter_cache_price", [""])[0],
+            }
+            update_settings(lambda s: s.update(filters))
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
@@ -1357,13 +1393,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length).decode("utf-8")
             params = parse_qs(body)
 
-            settings = load_settings()
-            settings["filter_model_id"] = params.get("filter_model_id", [""])[0]
-            settings["filter_context"] = params.get("filter_context", [""])[0]
-            settings["filter_input_price"] = params.get("filter_input_price", [""])[0]
-            settings["filter_output_price"] = params.get("filter_output_price", [""])[0]
-            settings["filter_cache_price"] = params.get("filter_cache_price", [""])[0]
-            save_settings(settings)
+            filters = {
+                "filter_model_id": params.get("filter_model_id", [""])[0],
+                "filter_context": params.get("filter_context", [""])[0],
+                "filter_input_price": params.get("filter_input_price", [""])[0],
+                "filter_output_price": params.get("filter_output_price", [""])[0],
+                "filter_cache_price": params.get("filter_cache_price", [""])[0],
+            }
+            update_settings(lambda s: s.update(filters))
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
