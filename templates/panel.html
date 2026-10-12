@@ -170,6 +170,18 @@
            предупреждение остаются на обычном фоне. */
         #compare-table td.cmp-rank1 > b { background: #d4edda; display: block; }
         #compare-table td.cmp-rank2 > b { background: #d1ecf1; display: block; }
+        /* Пресетные сценарии — тот же смысл, но бледнее: своя строка должна
+           выделяться сильнее остальных */
+        #compare-table td.cmp-rank1-pale > b { background: #e9f5eb; display: block; }
+        #compare-table td.cmp-rank2-pale > b { background: #e7f4f7; display: block; }
+        /* Свой сценарий: рамка по контуру строки. Каждая ячейка несёт свою
+           границу, поэтому контур сохраняется и при горизонтальной прокрутке */
+        #cmp-custom-row td {
+            border-top: 2px solid #adb5bd;
+            border-bottom: 2px solid #adb5bd;
+        }
+        #cmp-custom-row td:first-child { border-left: 2px solid #adb5bd; }
+        #cmp-custom-row td:last-child { border-right: 2px solid #adb5bd; }
         /* Предупреждение — своей плашкой, чтобы читалось на любом фоне */
         .cmp-warn {
             display: inline-block; background: #fff8e6; color: #856404;
@@ -645,15 +657,13 @@
     // Варианты (до 5 пар модель+провайдер) и сценарии в токенах.
     // Ничего не храним: состояние живёт только в памяти страницы.
     const CMP_MAX = Infinity;   // лимит вариантов снят по просьбе пользователя
+    // Сценарии подобраны так, чтобы каждый проверял своё ценовое измерение:
+    // базовые цены, дорогой вход, скидка за кэш и всё сразу с рассуждениями.
     const CMP_SCENARIOS = [
-        {name: 'Короткий вопрос',            inp: 1000,  out: 500,   rea: 0,     cr: 0},
-        {name: 'Классификация данных',        inp: 2000,  out: 300,   rea: 200,   cr: 0},
-        {name: 'Написание / редактирование',  inp: 3000,  out: 1500,  rea: 500,   cr: 0},
-        {name: 'Анализ документа',            inp: 20000, out: 2000,  rea: 2000,  cr: 0},
-        {name: 'База знаний',                 inp: 2000,  out: 800,   rea: 400,   cr: 50000},
-        {name: 'Лёгкая разработка',           inp: 5000,  out: 2000,  rea: 1000,  cr: 30000},
-        {name: 'Средняя разработка',          inp: 15000, out: 6000,  rea: 4000,  cr: 150000},
-        {name: 'Тяжёлая разработка',          inp: 40000, out: 15000, rea: 15000, cr: 600000}
+        {name: 'Простой диалог',             inp: 1000,  out: 500,   rea: 0,     cr: 0},
+        {name: 'Анализ большого документа',  inp: 20000, out: 2000,  rea: 2000,  cr: 0},
+        {name: 'Работа с базой знаний',      inp: 2000,  out: 800,   rea: 400,   cr: 50000},
+        {name: 'Агентная разработка',        inp: 40000, out: 15000, rea: 15000, cr: 600000}
     ];
     const cmpCustom = {name: 'Свой сценарий', inp: 0, out: 0, rea: 0, cr: 0};
     let cmpVariants = [];
@@ -866,18 +876,36 @@
     // в списке, ровно одно зелёное и одно голубое — иначе при ничьей оба
     // варианта получали бы первое место и подсветка выглядела залипшей.
     // Пустая строка (все нули) не ранжируется — иначе светилось бы всё.
+    // Округляет так же, как при показе (cmpRub). Без этого цены, выглядящие
+    // в таблице одинаково, получали бы разную подсветку — они отличаются
+    // в пятом знаке.
+    function cmpRankValue(v) {
+        return v >= 0.01 ? Math.round(v * 100) / 100 : Math.round(v * 1000) / 1000;
+    }
+
     function cmpRanks(s) {
         const totals = cmpVariants.map(v => cmpTotalValue(v, s));
         const valid = totals.filter(t => t !== null && t > 0);
-        if (valid.length < 2) return totals.map(() => '');
-        const order = totals
-            .map((t, i) => ({ t, i }))
-            .filter(x => x.t !== null && x.t > 0)
-            .sort((a, b) => a.t - b.t || a.i - b.i);
-        const res = totals.map(() => '');
-        if (order.length > 0) res[order[0].i] = ' cmp-rank1';
-        if (order.length > 1) res[order[1].i] = ' cmp-rank2';
-        return res;
+        if (valid.length < 2) return totals.map(() => 0);
+        // Ранжируем по ЗНАЧЕНИЮ, а не по позиции: все варианты с одинаковой
+        // ценой получают одно место. Иначе при ничьей заливается только
+        // первый из них, и подсветка выглядит произвольной.
+        const rounded = totals.map(t => (t === null ? null : cmpRankValue(t)));
+        const sorted = [...new Set(rounded.filter(t => t !== null && t > 0))].sort((a, b) => a - b);
+        const first = sorted[0], second = sorted[1];
+        return rounded.map(t => {
+            if (t === null || t === 0) return 0;
+            if (t === first) return 1;      // все с лучшей ценой
+            if (t === second) return 2;     // все со второй по значению
+            return 0;
+        });
+    }
+
+    // Класс места: у своего сценария цвет насыщенный, у пресетов — бледнее,
+    // чтобы взгляд цеплялся прежде всего за свою строку
+    function cmpRankClass(rank, pale) {
+        if (!rank) return '';
+        return ' cmp-rank' + rank + (pale ? '-pale' : '');
     }
 
     function cmpCell(v, s) {
@@ -977,12 +1005,15 @@
             '</tr></thead><tbody>';
 
         for (const s of CMP_SCENARIOS) {
+            const ranks = cmpRanks(s);
             html += '<tr><td>' + cmpEsc(s.name) +
                 cmpMoneyGrid([['вход', cmpGroup(s.inp)], ['выход', cmpGroup(s.out)],
                               ['рассужд', cmpGroup(s.rea)], ['кэш-чт', cmpGroup(s.cr)]]) + '</td>' +
-                cmpVariants.map(v => {
+                cmpVariants.map((v, i) => {
                     const warn = cmpWarn(v, s);
-                    return '<td' + (warn ? ' class="cmp-cell-warn"' : '') + '>' + cmpCell(v, s) + '</td>';
+                    const cls = cmpRankClass(ranks[i], true) +
+                                (warn ? ' cmp-cell-warn' : '');
+                    return '<td' + (cls ? ' class="' + cls.trim() + '"' : '') + '>' + cmpCell(v, s) + '</td>';
                 }).join('') + '</tr>';
         }
 
@@ -998,8 +1029,8 @@
             cmpVariants.map((v, i) => {
                 // Место красит строку цены, а Amber фон ячейки — про предупреждение.
                 // Это разные слои, поэтому классы складываются, а не исключают друг друга.
-                const cls = (customRanks[i] ? customRanks[i].trim() + ' ' : '') +
-                            (cmpWarn(v, cmpCustom) ? 'cmp-cell-warn' : '');
+                const cls = cmpRankClass(customRanks[i], false) +
+                            (cmpWarn(v, cmpCustom) ? ' cmp-cell-warn' : '');
                 return '<td id="cmp-custom-cell-' + i + '"' +
                     (cls.trim() ? ' class="' + cls.trim() + '"' : '') + '>' +
                     cmpCell(v, cmpCustom) + '</td>';
@@ -1017,8 +1048,8 @@
         cmpVariants.forEach((v, i) => {
             const cell = document.getElementById('cmp-custom-cell-' + i);
             if (!cell) return;
-            const cls = (ranks[i] ? ranks[i].trim() + ' ' : '') +
-                        (cmpWarn(v, cmpCustom) ? 'cmp-cell-warn' : '');
+            const cls = cmpRankClass(ranks[i], false) +
+                        (cmpWarn(v, cmpCustom) ? ' cmp-cell-warn' : '');
             cell.className = cls.trim();
             cell.innerHTML = cmpCell(v, cmpCustom);
         });
