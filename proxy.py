@@ -428,85 +428,12 @@ def get_selected_endpoint(model_id, provider_tag, catalog_data):
     return {}
 
 
-def render_html(settings, catalog_data):
-    html = HTML_TEMPLATE
+def render_catalog_sections(catalog_data, settings) -> str:
+    """Отрисовывает все модели каталога: заголовок, описание и таблица провайдеров.
 
-    # Значения фильтров из настроек
-    html = html.replace("<!-- FILTER_MODEL_ID -->", str(settings.get("filter_model_id", "")))
-    html = html.replace("<!-- FILTER_CONTEXT -->", str(settings.get("filter_context", "")))
-    html = html.replace("<!-- FILTER_INPUT_PRICE -->", str(settings.get("filter_input_price", "")))
-    html = html.replace("<!-- FILTER_OUTPUT_PRICE -->", str(settings.get("filter_output_price", "")))
-    html = html.replace("<!-- FILTER_CACHE_PRICE -->", str(settings.get("filter_cache_price", "")))
-
-    # Состояние чекбоксов
-    html = html.replace("<!-- LOGGING_CHECKED -->", "checked" if settings.get("logging_enabled", True) else "")
-    html = html.replace("<!-- AUTO_OPEN_CHECKED -->", "checked" if settings.get("auto_open_on_block", False) else "")
-    html = html.replace("<!-- OPENCODE_REPLACE_CHECKED -->", "checked" if settings.get("opencode_config_allow_replace", False) else "")
-    html = html.replace("<!-- OPENCODE_CONFIG_PATH -->", str(settings.get("opencode_config_path", "")))
-
-    # Дата обновления кэша моделей
-    cache_date = get_cache_info()
-    html = html.replace("<!-- CACHE_DATE -->", cache_date)
-
-    # Профиль
-    if settings.get("selected_model") and settings.get("selected_provider"):
-        frozen = settings.get("frozen_prices", {})
-        model_name = get_model_display_name(settings["selected_model"], catalog_data)
-        selected_ep = get_selected_endpoint(settings["selected_model"], settings["selected_provider"], catalog_data)
-        context_len = selected_ep.get("context_length") or 0
-        output_len = selected_ep.get("max_completion_tokens") or 0
-        provider_name = selected_ep.get("provider_name") or ""
-        quantization = selected_ep.get("quantization") or ""
-        prov_display = f'<span class="profile-val">{provider_name}</span>' if provider_name else ""
-        if quantization:
-            prov_display += f' <small style="color:gray;">{quantization}</small>'
-        tag_display = f'<span class="profile-val">{settings["selected_provider"]}</span>'
-        # Обе величины в одну строку; пропускаем те, которых нет в каталоге
-        tokens_display = " / ".join(
-            t for t in (format_tokens(context_len), format_tokens(output_len)) if t != "—"
-        )
-        extra_prices = format_extra_prices(selected_ep, inline=True)
-        extra_html = f'<p><strong>Дополнительно:</strong><br>{extra_prices}</p>' if extra_prices else ''
-        context_html = (f'<p><strong>Контекст / Выход:</strong> '
-                        f'<strong>{tokens_display}</strong> токенов</p>'
-                        if tokens_display else '')
-        links_html = f'''
-            <p style="margin-top: 8px;">
-                <a href="https://routerai.ru/models/{settings["selected_model"]}" target="_blank" style="font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
-                <a href="https://routerai.ru/api/v1/models/{settings["selected_model"]}/endpoints" target="_blank" style="font-size: 13px; color: #28a745; text-decoration: none; margin-left: 10px;">[Endpoints ↗]</a>
-            </p>'''
-        profile_html = f'''
-            <p style="margin-bottom: 10px;">
-                <span style="font-size: 16px;"><strong>{model_name}</strong></span>
-                <span style="color: #666; font-size: 13px; margin-left: 10px;">ID: <code>{settings["selected_model"]}</code></span>
-            </p>
-            <p><strong>Провайдер (Хост):</strong> {prov_display}</p>
-            <p><strong>Тег провайдера:</strong> {tag_display}</p>
-            {context_html}'''
-        if frozen:
-            profile_html += f'''
-            <p><strong>Цена фиксации (за 1М токенов):</strong>
-                Вх: <span style="color:#28a745; font-weight:bold;">{frozen.get("prompt", 0) * 1000000:.2f} ₽</span> |
-                Вых: <span style="color:#28a745; font-weight:bold;">{frozen.get("completion", 0) * 1000000:.2f} ₽</span> |
-                Кэш чтения: <span style="color:#28a745; font-weight:bold;">{frozen.get("input_cache_read", 0) * 1000000:.2f} ₽</span> |
-                Кэш записи: <span style="color:#28a745; font-weight:bold;">{frozen.get("input_cache_write", 0) * 1000000:.2f} ₽</span>
-            </p>'''
-        profile_html += extra_html
-        profile_html += links_html
-        if settings.get("is_blocked"):
-            profile_html += f'''
-            <p id="profile-block-status" style="padding:12px;background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;border-radius:4px;margin-top:10px;">
-                <strong>[ЗАПРОСЫ ЗАБЛОКИРОВАНЫ]</strong><br>{settings.get("block_reason", "")}<br>
-                <small>Выберите модель ниже, чтобы применить новые цены и снять блокировку.</small>
-            </p>'''
-        html = html.replace("<!-- PROFILE_INFO -->", profile_html)
-    else:
-        html = html.replace("<!-- PROFILE_INFO -->", '''
-            <p style="color: #856404; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; padding: 12px; margin: 0;">
-                <strong>Модель не выбрана.</strong> Нажмите «Обновить модели», задайте фильтры и нажмите «Выбрать» напротив нужного провайдера.
-            </p>''')
-
-    # Каталог
+    Раньше эта разметка была продублирована в render_html и handle_api_catalog,
+    и любую правку таблицы приходилось вносить в два места.
+    """
     catalog_html = ""
     for item in catalog_data:
         created = item.get("created")
@@ -587,6 +514,90 @@ def render_html(settings, catalog_data):
                 </tbody>
             </table>
         </div>'''
+
+    return catalog_html
+
+
+def render_html(settings, catalog_data):
+    html = HTML_TEMPLATE
+
+    # Значения фильтров из настроек
+    html = html.replace("<!-- FILTER_MODEL_ID -->", str(settings.get("filter_model_id", "")))
+    html = html.replace("<!-- FILTER_CONTEXT -->", str(settings.get("filter_context", "")))
+    html = html.replace("<!-- FILTER_INPUT_PRICE -->", str(settings.get("filter_input_price", "")))
+    html = html.replace("<!-- FILTER_OUTPUT_PRICE -->", str(settings.get("filter_output_price", "")))
+    html = html.replace("<!-- FILTER_CACHE_PRICE -->", str(settings.get("filter_cache_price", "")))
+
+    # Состояние чекбоксов
+    html = html.replace("<!-- LOGGING_CHECKED -->", "checked" if settings.get("logging_enabled", True) else "")
+    html = html.replace("<!-- AUTO_OPEN_CHECKED -->", "checked" if settings.get("auto_open_on_block", False) else "")
+    html = html.replace("<!-- OPENCODE_REPLACE_CHECKED -->", "checked" if settings.get("opencode_config_allow_replace", False) else "")
+    html = html.replace("<!-- OPENCODE_CONFIG_PATH -->", str(settings.get("opencode_config_path", "")))
+
+    # Дата обновления кэша моделей
+    cache_date = get_cache_info()
+    html = html.replace("<!-- CACHE_DATE -->", cache_date)
+
+    # Профиль
+    if settings.get("selected_model") and settings.get("selected_provider"):
+        frozen = settings.get("frozen_prices", {})
+        model_name = get_model_display_name(settings["selected_model"], catalog_data)
+        selected_ep = get_selected_endpoint(settings["selected_model"], settings["selected_provider"], catalog_data)
+        context_len = selected_ep.get("context_length") or 0
+        output_len = selected_ep.get("max_completion_tokens") or 0
+        provider_name = selected_ep.get("provider_name") or ""
+        quantization = selected_ep.get("quantization") or ""
+        prov_display = f'<span class="profile-val">{provider_name}</span>' if provider_name else ""
+        if quantization:
+            prov_display += f' <small style="color:gray;">{quantization}</small>'
+        tag_display = f'<span class="profile-val">{settings["selected_provider"]}</span>'
+        # Обе величины в одну строку; пропускаем те, которых нет в каталоге
+        tokens_display = " / ".join(
+            t for t in (format_tokens(context_len), format_tokens(output_len)) if t != "—"
+        )
+        extra_prices = format_extra_prices(selected_ep, inline=True)
+        extra_html = f'<p><strong>Дополнительно:</strong><br>{extra_prices}</p>' if extra_prices else ''
+        context_html = (f'<p><strong>Контекст / Выход:</strong> '
+                        f'<strong>{tokens_display}</strong> токенов</p>'
+                        if tokens_display else '')
+        links_html = f'''
+            <p style="margin-top: 8px;">
+                <a href="https://routerai.ru/models/{settings["selected_model"]}" target="_blank" style="font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
+                <a href="https://routerai.ru/api/v1/models/{settings["selected_model"]}/endpoints" target="_blank" style="font-size: 13px; color: #28a745; text-decoration: none; margin-left: 10px;">[Endpoints ↗]</a>
+            </p>'''
+        profile_html = f'''
+            <p style="margin-bottom: 10px;">
+                <span style="font-size: 16px;"><strong>{model_name}</strong></span>
+                <span style="color: #666; font-size: 13px; margin-left: 10px;">ID: <code>{settings["selected_model"]}</code></span>
+            </p>
+            <p><strong>Провайдер (Хост):</strong> {prov_display}</p>
+            <p><strong>Тег провайдера:</strong> {tag_display}</p>
+            {context_html}'''
+        if frozen:
+            profile_html += f'''
+            <p><strong>Цена фиксации (за 1М токенов):</strong>
+                Вх: <span style="color:#28a745; font-weight:bold;">{frozen.get("prompt", 0) * 1000000:.2f} ₽</span> |
+                Вых: <span style="color:#28a745; font-weight:bold;">{frozen.get("completion", 0) * 1000000:.2f} ₽</span> |
+                Кэш чтения: <span style="color:#28a745; font-weight:bold;">{frozen.get("input_cache_read", 0) * 1000000:.2f} ₽</span> |
+                Кэш записи: <span style="color:#28a745; font-weight:bold;">{frozen.get("input_cache_write", 0) * 1000000:.2f} ₽</span>
+            </p>'''
+        profile_html += extra_html
+        profile_html += links_html
+        if settings.get("is_blocked"):
+            profile_html += f'''
+            <p id="profile-block-status" style="padding:12px;background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;border-radius:4px;margin-top:10px;">
+                <strong>[ЗАПРОСЫ ЗАБЛОКИРОВАНЫ]</strong><br>{settings.get("block_reason", "")}<br>
+                <small>Выберите модель ниже, чтобы применить новые цены и снять блокировку.</small>
+            </p>'''
+        html = html.replace("<!-- PROFILE_INFO -->", profile_html)
+    else:
+        html = html.replace("<!-- PROFILE_INFO -->", '''
+            <p style="color: #856404; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; padding: 12px; margin: 0;">
+                <strong>Модель не выбрана.</strong> Нажмите «Обновить модели», задайте фильтры и нажмите «Выбрать» напротив нужного провайдера.
+            </p>''')
+
+    # Каталог
+    catalog_html = render_catalog_sections(catalog_data, settings)
     html = html.replace("<!-- CATALOG_DATA -->", catalog_html)
     # Если каталог отрендерен — убираем заглушку «не загружен»
     if catalog_html:
@@ -1083,87 +1094,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     catalog_data = fetch_catalog()
 
             # Рендерим только каталог без полной страницы
-            catalog_html = ""
-            for item in catalog_data:
-                created = item.get("created")
-                if created:
-                    from datetime import datetime
-                    date_str = datetime.fromtimestamp(created).strftime("%d.%m.%Y")
-                else:
-                    date_str = ""
-                description = item.get("description", "")
-                catalog_html += f'''
-        <div class="model-section">
-            <h3 class="model-title">{item["name"]} <span class="model-id">ID: <code>{item["id"]}</code></span>
-            <span style="margin-left: 15px; font-size: 13px; color: #666;">{date_str}</span>
-            <a href="https://routerai.ru/models/{item["id"]}" target="_blank" style="margin-left: 15px; font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
-            <a href="https://routerai.ru/api/v1/models/{item["id"]}/endpoints" target="_blank" style="margin-left: 10px; font-size: 13px; color: #28a745; text-decoration: none;">[Endpoints ↗]</a></h3>
-            {f'<details style="margin-bottom: 10px;"><summary style="cursor: pointer; color: #666; font-size: 13px;">Описание</summary><p style="margin: 5px 0 0 0; font-size: 13px; color: #555;">{description}</p></details>' if description else ''}
-            <table>
-                <thead>
-                    <tr>
-                        <th>Провайдер (Хост)</th>
-                        <th>Тег провайдера</th>
-                        <th>Контекст / Выход</th>
-                        <th>Тариф</th>
-                        <th style="text-align: right;">Вход (₽/1М)</th>
-                        <th style="text-align: right;">Выход (₽/1М)</th>
-                        <th style="text-align: right;">Кэш: чтение (₽/1М)</th>
-                        <th style="text-align: right;">Кэш: запись (₽/1М)</th>
-                        <th style="text-align: right; min-width: 180px;">Дополнительно</th>
-                        <th>Действие<br>
-                            <label style="font-size: 11px; font-weight: normal; cursor: pointer;" title="Выбрать к сравнению всех провайдеров этой модели">
-                                <input type="checkbox" class="cmp-check-model" data-model="{item["id"]}" onchange="toggleCompareModel(this, '{item["id"]}')"> все
-                            </label>
-                        </th>
-                    </tr>
-                </thead>
-                <tbody>'''
-                for ep in item["endpoints"]:
-                    selected_style = ' style="background: #e2f0d9;"' if (
-                        settings.get("selected_model") == item["id"] and
-                        settings.get("selected_provider") == ep.get("tag")
-                    ) else ""
-                    vp_rows = format_variable_pricings(ep.get("variable_pricings"), ep.get("provider_name", ""), ep.get("tag", ""))
-                    extra_prices = format_extra_prices(ep)
-                    tokens_display = " / ".join(
-                        t for t in (format_tokens(ep.get("context_length")),
-                                    format_tokens(ep.get("max_completion_tokens"))) if t != "—"
-                    ) or "—"
-                    catalog_html += f'''
-                    <tr class="provider-row"{selected_style}
-                        data-context-raw="{ep.get("context_length") or 0}"
-                        data-input="{(ep.get("pricing") or {}).get("prompt", 0) * 1000000}"
-                        data-output="{(ep.get("pricing") or {}).get("completion", 0) * 1000000}"
-                        data-cache="{(ep.get("pricing") or {}).get("input_cache_read", 0) * 1000000}"
-                        data-reasoning="{(ep.get("pricing") or {}).get("internal_reasoning", 0) * 1000000}"
-                        data-request="{(ep.get("pricing") or {}).get("request", 0)}"
-                        data-max-tokens="{ep.get("max_completion_tokens") or 0}"
-                        data-model="{item["id"]}"
-                        data-model-name="{get_model_display_name(item["id"], catalog_data)}"
-                        data-tag="{ep.get("tag", "")}"
-                        data-provider="{ep.get("provider_name", "")}">
-                        <td><strong>{ep.get("provider_name", "")}</strong> <small style="color:gray;">{ep.get("quantization", "")}</small></td>
-                        <td><code>{ep.get("tag", "")}</code></td>
-                        <td><strong>{tokens_display}</strong> токенов</td>
-                        <td style="text-align: center; font-size: 14px;">Базовый</td>
-                        <td style="text-align: right; font-size: 14px;">{format_price_cell(ep, "prompt")}</td>
-                        <td style="text-align: right; font-size: 14px;">{format_price_cell(ep, "completion")}</td>
-                        <td style="text-align: right; font-size: 14px;">{format_price_cell(ep, "input_cache_read")}</td>
-                        <td style="text-align: right; font-size: 14px;">{format_price_cell(ep, "input_cache_write")}</td>
-                        <td style="text-align: right; font-size: 14px;">{extra_prices}</td>
-                        <td style="white-space: nowrap; line-height: 2.1;">
-                            <button class="btn" onclick="selectProvider('{item["id"]}', '{ep.get("tag", "")}', {(ep.get("pricing") or {}).get("prompt", 0)}, {(ep.get("pricing") or {}).get("completion", 0)}, {(ep.get("pricing") or {}).get("input_cache_read", 0)})">Выбрать</button><br>
-                            <label style="font-size: 12px; cursor: pointer;" title="Добавить в сравнение затрат">
-                                <input type="checkbox" class="cmp-check" onchange="toggleCompare(this)"> сравнить
-                            </label>
-                        </td>
-                    </tr>{vp_rows}'''
-                catalog_html += '''
-                </tbody>
-            </table>
-        </div>'''
-            
+            catalog_html = render_catalog_sections(catalog_data, settings)
+
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
