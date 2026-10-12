@@ -245,13 +245,13 @@ def price_monitor_loop():
                             ))
                             write_log("Монитор", reason)
         except Exception as e:
-            print(f"Ошибка мониторинга цен: {e}")
+            write_log("Монитор", f"Ошибка мониторинга цен: {e}")
 
         try:
             settings = load_settings()
             time.sleep(settings.get("check_interval_sec", 600))
         except Exception as e:
-            print(f"Ошибка в цикле мониторинга при ожидании: {e}")
+            write_log("Монитор", f"Ошибка в цикле мониторинга при ожидании: {e}")
             time.sleep(600)
 
 
@@ -851,7 +851,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:
-            print(f"Ошибка при отображении главной страницы: {e}")
+            write_log("Прокси", f"Ошибка при отображении главной страницы: {e}")
 
     def handle_list_models(self):
         try:
@@ -1287,7 +1287,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             "variable_pricings": current_ep.get("variable_pricings") or []
                         }
                 except Exception as e:
-                    print(e)
+                    write_log("Прокси", f"Ошибка снятия блокировки: {e}")
             def lift_block(s):
                 s["is_blocked"] = False
                 s["block_reason"] = ""
@@ -1389,8 +1389,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def handle_chat_completions(self):
-        settings = load_settings()
+    def _reject_chat(self, status, message, err_type="invalid_request_error", code=None):
+        """Отклоняет запрос к чату с логированием причины."""
+        write_log("Прокси", f"Отклонено: {message}")
+        self.send_openai_error(status, message, err_type=err_type, code=code)
+
+    def _check_chat_allowed(self, settings):
+        """Проверяет, можно ли обрабатывать запрос. Возвращает ключ или None."""
         if settings.get("is_blocked"):
             write_log("Прокси", f"Запрос заблокирован: {settings['block_reason']}")
             # Авто-открытие панели управления в браузере (если включено)
@@ -1408,21 +1413,25 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 err_type="rate_limit_error",
                 code="price_changed"
             )
-            return
-        if not settings.get("selected_model"):
-            write_log("Прокси", "Отклонено: модель не выбрана")
-            self.send_openai_error(400, "Модель не выбрана в веб-панели управления!")
-            return
-        if not settings.get("selected_provider"):
-            write_log("Прокси", "Отклонено: провайдер не выбран")
-            self.send_openai_error(400, "Провайдер не выбран в веб-панели управления!")
-            return
+            return None
+
+        if not settings.get("selected_model") or not settings.get("selected_provider"):
+            self._reject_chat(400, "Модель или провайдер не выбраны в веб-панели управления!")
+            return None
 
         api_key, key_error = resolve_api_key(settings)
         if key_error:
             # Не логируем сам ключ — только причину (и имя переменной, если ссылка)
             write_log("Прокси", f"Отклонено: {key_error}")
             self.send_openai_error(401, key_error, err_type="authentication_error", code="invalid_api_key")
+            return None
+
+        return api_key
+
+    def handle_chat_completions(self):
+        settings = load_settings()
+        api_key = self._check_chat_allowed(settings)
+        if api_key is None:
             return
 
         final_model = f"{settings['selected_model']}@provider={settings['selected_provider']}&allow_fallbacks=false"
