@@ -521,6 +521,21 @@
             });
     }
 
+    // Выбор провайдера: значения берём из data-* атрибутов строки, а не из
+    // onclick — иначе данные из API RouterAI попадают прямо в JavaScript
+    function selectProviderFromRow(btn) {
+        const row = btn.closest('tr');
+        if (!row) return;
+        const num = (attr) => parseFloat(row.getAttribute(attr)) || 0;
+        selectProvider(
+            row.getAttribute('data-model'),
+            row.getAttribute('data-tag'),
+            num('data-input') / 1000000,
+            num('data-output') / 1000000,
+            num('data-cache') / 1000000
+        );
+    }
+
     function selectProvider(modelId, providerTag, prompt, completion, cache) {
         const formData = new URLSearchParams();
         formData.append('model_id', modelId);

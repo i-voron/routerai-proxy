@@ -9,6 +9,7 @@ import threading
 import urllib.request
 import urllib.error
 import webbrowser
+import html as html_lib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -45,6 +46,15 @@ default_settings = {
     "opencode_config_path": "",
     "opencode_config_allow_replace": False
 }
+
+
+def esc(value) -> str:
+    """Экранирует строку из API RouterAI перед вставкой в HTML.
+
+    Названия моделей и провайдеров приходят извне и могут содержать разметку.
+    Без экранирования она выполнилась бы в панели, где открыт конфиг с ключом.
+    """
+    return html_lib.escape(str(value), quote=True)
 
 
 def atomic_write(path: str, data: str) -> None:
@@ -293,8 +303,8 @@ def format_variable_pricings(variable_pricings, provider_name="", provider_tag="
             threshold_text = pricing_type
         
         rows.append(f'''
-                    <tr class="variable-pricing-row" style="background: #fff3cd;" data-provider-assoc="{provider_tag}">
-                        <td colspan="3" style="font-size: 13px; color: #856404;">{provider_name}</td>
+                    <tr class="variable-pricing-row" style="background: #fff3cd;" data-provider-assoc="{esc(provider_tag)}">
+                        <td colspan="3" style="font-size: 13px; color: #856404;">{esc(provider_name)}</td>
                         <td style="text-align: center; color: #666; font-size: 14px;">{threshold_text}</td>
                         <td style="text-align: right; font-size: 14px;">{prompt * 1000000:.2f}</td>
                         <td style="text-align: right; font-size: 14px;">{completion * 1000000:.2f}</td>
@@ -445,11 +455,11 @@ def render_catalog_sections(catalog_data, settings) -> str:
         description = item.get("description", "")
         catalog_html += f'''
         <div class="model-section">
-            <h3 class="model-title">{item["name"]} <span class="model-id">ID: <code>{item["id"]}</code></span>
+            <h3 class="model-title">{esc(item["name"])} <span class="model-id">ID: <code>{esc(item["id"])}</code></span>
             <span style="margin-left: 15px; font-size: 13px; color: #666;">{date_str}</span>
-            <a href="https://routerai.ru/models/{item["id"]}" target="_blank" style="margin-left: 15px; font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
-            <a href="https://routerai.ru/api/v1/models/{item["id"]}/endpoints" target="_blank" style="margin-left: 10px; font-size: 13px; color: #28a745; text-decoration: none;">[Endpoints ↗]</a></h3>
-            {f'<details style="margin-bottom: 10px;"><summary style="cursor: pointer; color: #666; font-size: 13px;">Описание</summary><p style="margin: 5px 0 0 0; font-size: 13px; color: #555;">{description}</p></details>' if description else ''}
+            <a href="https://routerai.ru/models/{esc(item["id"])}" target="_blank" style="margin-left: 15px; font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
+            <a href="https://routerai.ru/api/v1/models/{esc(item["id"])}/endpoints" target="_blank" style="margin-left: 10px; font-size: 13px; color: #28a745; text-decoration: none;">[Endpoints ↗]</a></h3>
+            {f'<details style="margin-bottom: 10px;"><summary style="cursor: pointer; color: #666; font-size: 13px;">Описание</summary><p style="margin: 5px 0 0 0; font-size: 13px; color: #555;">{esc(description)}</p></details>' if description else ''}
             <table>
                 <thead>
                     <tr>
@@ -464,7 +474,7 @@ def render_catalog_sections(catalog_data, settings) -> str:
                         <th style="text-align: right; min-width: 180px;">Дополнительно</th>
                         <th>Действие<br>
                             <label style="font-size: 11px; font-weight: normal; cursor: pointer;" title="Выбрать к сравнению всех провайдеров этой модели">
-                                <input type="checkbox" class="cmp-check-model" data-model="{item["id"]}" onchange="toggleCompareModel(this, '{item["id"]}')"> все
+                                <input type="checkbox" class="cmp-check-model" data-model="{esc(item["id"])}" onchange="toggleCompareModel(this, '{esc(item["id"])}')"> все
                             </label>
                         </th>
                     </tr>
@@ -490,12 +500,12 @@ def render_catalog_sections(catalog_data, settings) -> str:
                         data-reasoning="{(ep.get("pricing") or {}).get("internal_reasoning", 0) * 1000000}"
                         data-request="{(ep.get("pricing") or {}).get("request", 0)}"
                         data-max-tokens="{ep.get("max_completion_tokens") or 0}"
-                        data-model="{item["id"]}"
-                        data-model-name="{get_model_display_name(item["id"], catalog_data)}"
-                        data-tag="{ep.get("tag", "")}"
-                        data-provider="{ep.get("provider_name", "")}">
-                        <td><strong>{ep.get("provider_name", "")}</strong> <small style="color:gray;">{ep.get("quantization", "")}</small></td>
-                        <td><code>{ep.get("tag", "")}</code></td>
+                        data-model="{esc(item["id"])}"
+                        data-model-name="{esc(get_model_display_name(item["id"], catalog_data))}"
+                        data-tag="{esc(ep.get("tag", ""))}"
+                        data-provider="{esc(ep.get("provider_name", ""))}">
+                        <td><strong>{esc(ep.get("provider_name", ""))}</strong> <small style="color:gray;">{esc(ep.get("quantization", ""))}</small></td>
+                        <td><code>{esc(ep.get("tag", ""))}</code></td>
                         <td><strong>{tokens_display}</strong> токенов</td>
                         <td style="text-align: center; font-size: 14px;">Базовый</td>
                         <td style="text-align: right; font-size: 14px;">{format_price_cell(ep, "prompt")}</td>
@@ -504,7 +514,7 @@ def render_catalog_sections(catalog_data, settings) -> str:
                         <td style="text-align: right; font-size: 14px;">{format_price_cell(ep, "input_cache_write")}</td>
                         <td style="text-align: right; font-size: 14px;">{format_extra_prices(ep)}</td>
                         <td style="white-space: nowrap; line-height: 2.1;">
-                            <button class="btn" onclick="selectProvider('{item["id"]}', '{ep.get("tag", "")}', {(ep.get("pricing") or {}).get("prompt", 0)}, {(ep.get("pricing") or {}).get("completion", 0)}, {(ep.get("pricing") or {}).get("input_cache_read", 0)})">Выбрать</button><br>
+                            <button class="btn" onclick="selectProviderFromRow(this)">Выбрать</button><br>
                             <label style="font-size: 12px; cursor: pointer;" title="Добавить в сравнение затрат">
                                 <input type="checkbox" class="cmp-check" onchange="toggleCompare(this)"> сравнить
                             </label>
@@ -522,17 +532,17 @@ def render_html(settings, catalog_data):
     html = HTML_TEMPLATE
 
     # Значения фильтров из настроек
-    html = html.replace("<!-- FILTER_MODEL_ID -->", str(settings.get("filter_model_id", "")))
-    html = html.replace("<!-- FILTER_CONTEXT -->", str(settings.get("filter_context", "")))
-    html = html.replace("<!-- FILTER_INPUT_PRICE -->", str(settings.get("filter_input_price", "")))
-    html = html.replace("<!-- FILTER_OUTPUT_PRICE -->", str(settings.get("filter_output_price", "")))
-    html = html.replace("<!-- FILTER_CACHE_PRICE -->", str(settings.get("filter_cache_price", "")))
+    html = html.replace("<!-- FILTER_MODEL_ID -->", esc(settings.get("filter_model_id", "")))
+    html = html.replace("<!-- FILTER_CONTEXT -->", esc(settings.get("filter_context", "")))
+    html = html.replace("<!-- FILTER_INPUT_PRICE -->", esc(settings.get("filter_input_price", "")))
+    html = html.replace("<!-- FILTER_OUTPUT_PRICE -->", esc(settings.get("filter_output_price", "")))
+    html = html.replace("<!-- FILTER_CACHE_PRICE -->", esc(settings.get("filter_cache_price", "")))
 
     # Состояние чекбоксов
     html = html.replace("<!-- LOGGING_CHECKED -->", "checked" if settings.get("logging_enabled", True) else "")
     html = html.replace("<!-- AUTO_OPEN_CHECKED -->", "checked" if settings.get("auto_open_on_block", False) else "")
     html = html.replace("<!-- OPENCODE_REPLACE_CHECKED -->", "checked" if settings.get("opencode_config_allow_replace", False) else "")
-    html = html.replace("<!-- OPENCODE_CONFIG_PATH -->", str(settings.get("opencode_config_path", "")))
+    html = html.replace("<!-- OPENCODE_CONFIG_PATH -->", esc(settings.get("opencode_config_path", "")))
 
     # Дата обновления кэша моделей
     cache_date = get_cache_info()
@@ -547,10 +557,10 @@ def render_html(settings, catalog_data):
         output_len = selected_ep.get("max_completion_tokens") or 0
         provider_name = selected_ep.get("provider_name") or ""
         quantization = selected_ep.get("quantization") or ""
-        prov_display = f'<span class="profile-val">{provider_name}</span>' if provider_name else ""
+        prov_display = f'<span class="profile-val">{esc(provider_name)}</span>' if provider_name else ""
         if quantization:
-            prov_display += f' <small style="color:gray;">{quantization}</small>'
-        tag_display = f'<span class="profile-val">{settings["selected_provider"]}</span>'
+            prov_display += f' <small style="color:gray;">{esc(quantization)}</small>'
+        tag_display = f'<span class="profile-val">{esc(settings["selected_provider"])}</span>'
         # Обе величины в одну строку; пропускаем те, которых нет в каталоге
         tokens_display = " / ".join(
             t for t in (format_tokens(context_len), format_tokens(output_len)) if t != "—"
@@ -562,13 +572,13 @@ def render_html(settings, catalog_data):
                         if tokens_display else '')
         links_html = f'''
             <p style="margin-top: 8px;">
-                <a href="https://routerai.ru/models/{settings["selected_model"]}" target="_blank" style="font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
-                <a href="https://routerai.ru/api/v1/models/{settings["selected_model"]}/endpoints" target="_blank" style="font-size: 13px; color: #28a745; text-decoration: none; margin-left: 10px;">[Endpoints ↗]</a>
+                <a href="https://routerai.ru/models/{esc(settings["selected_model"])}" target="_blank" style="font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
+                <a href="https://routerai.ru/api/v1/models/{esc(settings["selected_model"])}/endpoints" target="_blank" style="font-size: 13px; color: #28a745; text-decoration: none; margin-left: 10px;">[Endpoints ↗]</a>
             </p>'''
         profile_html = f'''
             <p style="margin-bottom: 10px;">
-                <span style="font-size: 16px;"><strong>{model_name}</strong></span>
-                <span style="color: #666; font-size: 13px; margin-left: 10px;">ID: <code>{settings["selected_model"]}</code></span>
+                <span style="font-size: 16px;"><strong>{esc(model_name)}</strong></span>
+                <span style="color: #666; font-size: 13px; margin-left: 10px;">ID: <code>{esc(settings["selected_model"])}</code></span>
             </p>
             <p><strong>Провайдер (Хост):</strong> {prov_display}</p>
             <p><strong>Тег провайдера:</strong> {tag_display}</p>
