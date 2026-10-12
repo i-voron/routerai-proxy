@@ -10,7 +10,9 @@
 
 | Файл | Назначение |
 |------|-----------|
-| `proxy.py` | основной скрипт |
+| `proxy.py` | основной скрипт — логика |
+| `templates/panel.html` | панель управления (HTML, CSS, JS) |
+| `tests/test_core.py` | тесты, запуск: `python3 -m unittest discover -s tests` |
 | `proxy_settings.json` | настройки (**создаётся при первом запуске**) |
 | `proxy.log` | лог работы прокси и загрузки моделей |
 | `catalog_cache.json` | кэш каталога моделей (создаётся при обновлении) |

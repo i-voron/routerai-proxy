@@ -233,5 +233,28 @@ class TestUpdateSettings(unittest.TestCase):
             self.assertEqual(settings[f"k{i}"], i)
 
 
+class TestReadBody(unittest.TestCase):
+    """Чтение тела запроса не должно терять данные из-за битого заголовка."""
+
+    def _handler(self, headers):
+        """Собирает объект с нужными атрибутами, не поднимая сервер."""
+        import io
+
+        handler = proxy.ProxyHandler.__new__(proxy.ProxyHandler)
+        handler.headers = headers
+        handler.rfile = io.BytesIO(b'{"a": 1}')
+        return handler
+
+    def test_returns_body_for_valid_length(self):
+        self.assertEqual(self._handler({"Content-Length": "8"})._read_body(), b'{"a": 1}')
+
+    def test_garbage_length_gives_empty_body(self):
+        for bad in ["abc", "", None, "-5"]:
+            self.assertEqual(self._handler({"Content-Length": bad})._read_body(), b"")
+
+    def test_huge_length_is_clamped(self):
+        self.assertEqual(self._handler({"Content-Length": "999999999"})._read_body(), b'{"a": 1}')
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

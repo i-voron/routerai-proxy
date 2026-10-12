@@ -19,6 +19,22 @@ LOG_FILE = "proxy.log"
 CACHE_FILE = "catalog_cache.json"
 ROUTERAI_BASE_URL = "https://routerai.ru/api/v1"
 
+# --- Таймауты обращений к RouterAI, секунды ---
+TIMEOUT_MODELS = 10        # список моделей
+TIMEOUT_ENDPOINTS = 10     # эндпоинты модели
+TIMEOUT_ENDPOINTS_LONG = 20  # эндпоинты в фоновом мониторе
+TIMEOUT_CHAT = 60          # генерация и стриминг
+
+# --- Значения по умолчанию, если провайдер их не сообщил ---
+DEFAULT_CONTEXT = 1048576
+DEFAULT_OUTPUT_TOKENS = 131000
+
+# Ограничение на размер тела запроса, чтобы битый заголовок не съел память
+MAX_BODY_BYTES = 5 * 1024 * 1024
+
+# Как часто монитор цен сверяется с RouterAI, секунды
+DEFAULT_CHECK_INTERVAL = 600
+
 # Блокировка для потокобезопасной записи в лог
 log_lock = threading.Lock()
 # Блокировка для потокобезопасной записи кэша каталога
@@ -35,7 +51,7 @@ default_settings = {
     "frozen_prices": {},
     "is_blocked": False,
     "block_reason": "",
-    "check_interval_sec": 600,
+    "check_interval_sec": DEFAULT_CHECK_INTERVAL,
     "filter_context": "",
     "filter_model_id": "",
     "filter_input_price": "",
@@ -72,7 +88,7 @@ def atomic_write(path: str, data: str) -> None:
     os.replace(tmp_path, path)
 
 
-def update_settings(mutator):
+def update_settings(mutator) -> dict:
     """Читает настройки, применяет изменение и сохраняет под одной блокировкой.
 
     Отдельные load + save терпят гонку: два потока прочитают одно состояние,
@@ -89,7 +105,7 @@ def update_settings(mutator):
         return settings
 
 
-def load_settings():
+def load_settings() -> dict:
     with settings_lock:
         if not os.path.exists(SETTINGS_FILE):
             atomic_write(SETTINGS_FILE, json.dumps(default_settings, indent=2, ensure_ascii=False))
@@ -102,7 +118,7 @@ def load_settings():
 ENV_REF_RE = re.compile(r"\s*\{env:\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\s*")
 
 
-def resolve_env_refs(value):
+def resolve_env_refs(value):  # noqa: ANN001
     """Разворачивает в настройках ссылки вида {env:ИМЯ_ПЕРЕМЕННОЙ}.
 
     Позволяет хранить секреты (например api_key) в переменных окружения,
@@ -117,7 +133,7 @@ def resolve_env_refs(value):
     return value
 
 
-def resolve_api_key(settings):
+def resolve_api_key(settings: dict):
     """Возвращает кортеж (ключ, сообщение_об_ошибке).
 
     Ключ разворачивается из {env:...} при необходимости. Сообщение об ошибке
@@ -140,7 +156,7 @@ def resolve_api_key(settings):
     return key, "API ключ не настроен! Укажите его в настройках."
 
 
-def get_port():
+def get_port() -> int:
     """Возвращает порт прокси из настроек (по умолчанию 5000)."""
     try:
         port = int(load_settings().get("port", 5000))
@@ -149,7 +165,7 @@ def get_port():
     return port if 1 <= port <= 65535 else 5000
 
 
-def get_base_url():
+def get_base_url() -> str:
     """Возвращает базовый URL панели управления, например http://127.0.0.1:5000."""
     return f"http://127.0.0.1:{get_port()}"
 
@@ -159,7 +175,7 @@ def get_base_url():
 _monitor_prev_blocked = None
 
 
-def price_monitor_loop():
+def price_monitor_loop() -> None:
     global _monitor_prev_blocked
     while True:
         try:
@@ -183,7 +199,7 @@ def price_monitor_loop():
                 if model and provider and frozen:
                     url = f"{ROUTERAI_BASE_URL}/models/{model}/endpoints"
                     req = urllib.request.Request(url, headers={"User-Agent": "RouterAI-Proxy/1.0"})
-                    with urllib.request.urlopen(req, timeout=10) as resp:
+                    with urllib.request.urlopen(req, timeout=TIMEOUT_ENDPOINTS) as resp:
                         data = json.loads(resp.read().decode("utf-8"))
                     endpoints = data.get("data", {}).get("endpoints", [])
 
@@ -249,10 +265,10 @@ def price_monitor_loop():
 
         try:
             settings = load_settings()
-            time.sleep(settings.get("check_interval_sec", 600))
+            time.sleep(settings.get("check_interval_sec", DEFAULT_CHECK_INTERVAL))
         except Exception as e:
             write_log("Монитор", f"Ошибка в цикле мониторинга при ожидании: {e}")
-            time.sleep(600)
+            time.sleep(DEFAULT_CHECK_INTERVAL)
 
 
 # --- ВЕБ-ИНТЕРФЕЙС УПРАВЛЕНИЯ С ТОЧЕЧНЫМИ ФИЛЬТРАМИ ПРОВАЙДЕРОВ ---
@@ -270,7 +286,7 @@ def load_html_template() -> str:
 HTML_TEMPLATE = load_html_template()
 
 
-def format_variable_pricings(variable_pricings, provider_name="", provider_tag=""):
+def format_variable_pricings(variable_pricings, provider_name="", provider_tag="") -> str:
     """Форматирует дополнительные цены строго для конкретного провайдера."""
     if not variable_pricings:
         return ""
@@ -314,7 +330,7 @@ def format_variable_pricings(variable_pricings, provider_name="", provider_tag="
     return "".join(rows)
 
 
-def format_tokens(value):
+def format_tokens(value) -> str:
     """Форматирует количество токенов компактно: 1048576 → «1048K», 8192 → «8K».
 
     Значения меньше 1000 показываются как есть — иначе при делении на 1000
@@ -329,7 +345,7 @@ def format_tokens(value):
     return f"{v // 1000}K" if v >= 1000 else str(v)
 
 
-def format_price_cell(ep, price_key):
+def format_price_cell(ep: dict, price_key: str) -> str:
     """Форматирует цену с учётом типа единицы (token, request и т.д.)."""
     pricing = ep.get("pricing") or {}
     pricing_units = ep.get("pricing_units") or {}
@@ -358,7 +374,7 @@ PRICE_META = {
 BASE_PRICE_KEYS = {"prompt", "completion", "input_cache_read", "input_cache_write"}
 
 
-def format_extra_prices(ep, inline=False):
+def format_extra_prices(ep: dict, inline: bool = False) -> str:
     """Форматирует дополнительные цены с русскими названиями и корректными единицами.
 
     inline=False — подпись и значение на разных строках (для узкой колонки таблицы)
@@ -401,7 +417,7 @@ def format_extra_prices(ep, inline=False):
     return "<br>".join(parts)
 
 
-def get_cache_info():
+def get_cache_info() -> str:
     """Возвращает дату последнего обновления файла кэша моделей."""
     try:
         if os.path.exists(CACHE_FILE):
@@ -413,7 +429,7 @@ def get_cache_info():
         return "недоступно"
 
 
-def get_model_display_name(model_id, catalog_data):
+def get_model_display_name(model_id, catalog_data) -> str:
     """Возвращает название модели по её ID из каталога. Если не найдено — сам ID."""
     if not model_id:
         return ""
@@ -423,7 +439,7 @@ def get_model_display_name(model_id, catalog_data):
     return model_id
 
 
-def get_selected_endpoint(model_id, provider_tag, catalog_data):
+def get_selected_endpoint(model_id, provider_tag, catalog_data) -> dict:
     """Возвращает endpoint выбранного провайдера для модели из каталога."""
     if not model_id or not provider_tag:
         return {}
@@ -525,7 +541,7 @@ def render_catalog_sections(catalog_data, settings) -> str:
     return catalog_html
 
 
-def render_html(settings, catalog_data):
+def render_html(settings: dict, catalog_data) -> str:
     html = HTML_TEMPLATE
 
     # Значения фильтров из настроек
@@ -615,7 +631,7 @@ def render_html(settings, catalog_data):
     return html
 
 
-def write_log(tag, msg):
+def write_log(tag: str, msg: str) -> None:
     """Запись лога в файл с учётом настройки logging_enabled."""
     try:
         settings = load_settings()
@@ -633,7 +649,7 @@ def write_log(tag, msg):
         pass
 
 
-def load_catalog_cache():
+def load_catalog_cache() -> list:
     """Загружает каталог из файла кэша. Возвращает [] если кэша нет."""
     try:
         with cache_lock:
@@ -647,7 +663,7 @@ def load_catalog_cache():
         return []
 
 
-def save_catalog_cache(catalog_data):
+def save_catalog_cache(catalog_data) -> None:
     """Сохраняет каталог в файл кэша с отметкой времени."""
     try:
         with cache_lock:
@@ -663,13 +679,13 @@ def save_catalog_cache(catalog_data):
         write_log("Каталог", f"Ошибка сохранения кэша: {e}")
 
 
-def fetch_catalog():
+def fetch_catalog() -> list:
     catalog_data = []
     try:
         write_log("Каталог", "Запрос /models...")
         url = f"{ROUTERAI_BASE_URL}/models"
         req = urllib.request.Request(url, headers={"User-Agent": "RouterAI-Proxy/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_ENDPOINTS) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         all_models = data.get("data", [])
         write_log("Каталог", f"Получено моделей: {len(all_models)} (тело ответа опущено)")
@@ -679,7 +695,7 @@ def fetch_catalog():
             try:
                 url = f"{ROUTERAI_BASE_URL}/models/{model_id}/endpoints"
                 req = urllib.request.Request(url, headers={"User-Agent": "RouterAI-Proxy/1.0"})
-                with urllib.request.urlopen(req, timeout=20) as resp:
+                with urllib.request.urlopen(req, timeout=TIMEOUT_ENDPOINTS_LONG) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                 endpoints = data.get("data", {}).get("endpoints", [])
                 if endpoints:
@@ -990,8 +1006,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 return
 
             ep = get_selected_endpoint(model_id, settings.get("selected_provider"), load_catalog_cache())
-            new_context = ep.get("context_length") or 1048576
-            new_output = ep.get("max_completion_tokens") or 131000
+            new_context = ep.get("context_length") or DEFAULT_CONTEXT
+            new_output = ep.get("max_completion_tokens") or DEFAULT_OUTPUT_TOKENS
             port = get_port()
 
             with open(cfg_path, "r", encoding="utf-8") as f:
@@ -1039,10 +1055,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
             model_id = settings.get("selected_model")
 
             # Берём контекст выбранной модели, чтобы limit был осмысленным
-            context_len = 1048576
+            context_len = DEFAULT_CONTEXT
             if model_id:
                 ep = get_selected_endpoint(model_id, settings.get("selected_provider"), load_catalog_cache())
-                context_len = ep.get("context_length") or 1048576
+                context_len = ep.get("context_length") or DEFAULT_CONTEXT
 
             config = {
                 "$schema": "https://opencode.ai",
@@ -1058,7 +1074,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         "models": {
                             "routerai/proxy-model": {
                                 "name": "RouterAI Контролируемая Модель",
-                                "limit": {"context": context_len, "output": 131000}
+                                "limit": {"context": context_len, "output": DEFAULT_OUTPUT_TOKENS}
                             }
                         }
                     }
@@ -1170,7 +1186,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # Валидация: проверяем, что провайдер существует в каталоге
             url = f"{ROUTERAI_BASE_URL}/models/{model_id}/endpoints"
             req = urllib.request.Request(url, headers={"User-Agent": "RouterAI-Proxy/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_ENDPOINTS) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             endpoints = data.get("data", {}).get("endpoints", [])
 
@@ -1268,7 +1284,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 try:
                     url = f"{ROUTERAI_BASE_URL}/models/{settings['selected_model']}/endpoints"
                     req = urllib.request.Request(url, headers={"User-Agent": "RouterAI-Proxy/1.0"})
-                    with urllib.request.urlopen(req, timeout=10) as resp:
+                    with urllib.request.urlopen(req, timeout=TIMEOUT_ENDPOINTS) as resp:
                         data = json.loads(resp.read().decode("utf-8"))
                     endpoints = data.get("data", {}).get("endpoints", [])
                     current_ep = next((ep for ep in endpoints if ep.get("tag") == settings["selected_provider"]), None)
@@ -1382,7 +1398,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _read_body(self, max_bytes: int = 5 * 1024 * 1024) -> bytes:
+    def _read_body(self, max_bytes: int = MAX_BODY_BYTES) -> bytes:
         """Читает тело запроса.
 
         Content-Length приходит извне, поэтому на битом или огромном заголовке
@@ -1444,7 +1460,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         final_model = f"{settings['selected_model']}@provider={settings['selected_provider']}&allow_fallbacks=false"
 
-        self._read_body()
+        body = self._read_body()
 
         try:
             incoming_data = json.loads(body.decode("utf-8"))
@@ -1473,7 +1489,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 },
                 method="POST"
             )
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_CHAT) as resp:
                 ctype = resp.headers.get("Content-Type", "application/json")
                 write_log("Прокси", f"Ответ RouterAI: статус {resp.status}, content-type={ctype}")
                 self.send_response(resp.status)
@@ -1513,7 +1529,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_openai_error(500, f"Ошибка при проксировании запроса: {e}", err_type="api_error", code="proxy_error")
 
 
-def prompt_open_browser():
+def prompt_open_browser() -> None:
     """Запрашивает открытие страницы в браузере в течение 5 секунд."""
     print("Открыть страницу управления в браузере? (Y/n): ", end="", flush=True)
 
@@ -1542,7 +1558,7 @@ def prompt_open_browser():
         print("Страница не открыта.")
 
 
-def _find_proxy_pids():
+def _find_proxy_pids() -> list:
     """Возвращает список PID других запущенных экземпляров proxy.py.
     Точно определяет процессы: argv[0] — python-интерпретатор, proxy.py — в аргументах."""
     my_pid = os.getpid()
@@ -1571,7 +1587,7 @@ def _find_proxy_pids():
     return found
 
 
-def _kill_windows_port_owner(port):
+def _kill_windows_port_owner(port: int) -> None:
     """Windows: освобождает указанный порт, находя занявший его процесс.
     На Windows нет /proc, поэтому ищем через netstat и снимаем через taskkill."""
     import subprocess
@@ -1599,7 +1615,7 @@ def _kill_windows_port_owner(port):
     return killed
 
 
-def kill_existing_instances():
+def kill_existing_instances() -> None:
     """Ищет и снимает ранее запущенные экземпляры proxy.py перед стартом нового."""
     port = get_port()
 
