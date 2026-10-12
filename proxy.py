@@ -44,18 +44,31 @@ default_settings = {
 }
 
 
+def atomic_write(path: str, data: str) -> None:
+    """Пишет файл так, чтобы он не мог остаться обрезанным.
+
+    Данные уходят во временный файл, сбрасываются на диск и только потом
+    подменяют целевой. os.replace на одной файловой системе атомарен, поэтому
+    читатель видит либо старую версию, либо новую — но не половину записи.
+    """
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+
+
 def load_settings():
     if not os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(default_settings, f, indent=2, ensure_ascii=False)
+        atomic_write(SETTINGS_FILE, json.dumps(default_settings, indent=2, ensure_ascii=False))
         return default_settings
     with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def save_settings(data):
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    atomic_write(SETTINGS_FILE, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 # Ссылка на переменную окружения в настройках: {env:ИМЯ_ПЕРЕМЕННОЙ}
@@ -607,8 +620,7 @@ def save_catalog_cache(catalog_data):
                 "models_count": len(catalog_data),
                 "catalog": catalog_data
             }
-            with open(CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False)
+            atomic_write(CACHE_FILE, json.dumps(payload, ensure_ascii=False))
         write_log("Каталог", f"Кэш сохранён: {len(catalog_data)} моделей")
     except Exception as e:
         write_log("Каталог", f"Ошибка сохранения кэша: {e}")
@@ -957,11 +969,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # --- Бэкап перед первой записью ---
             backup_path = cfg_path + ".bak"
             if not os.path.exists(backup_path):
-                with open(backup_path, "w", encoding="utf-8") as bf:
-                    bf.write(original)
+                atomic_write(backup_path, original)
 
-            with open(cfg_path, "w", encoding="utf-8") as f:
-                f.write(text)
+            atomic_write(cfg_path, text)
 
             changes = []
             if port_changed:
@@ -1021,8 +1031,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             }
 
             out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opencode.jsonc")
-            with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(config, f, ensure_ascii=False, indent=2)
+            atomic_write(out_path, json.dumps(config, ensure_ascii=False, indent=2))
 
             write_log("Прокси", f"Выгружен конфиг OpenCode: {out_path}")
 
