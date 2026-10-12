@@ -1,0 +1,1013 @@
+<html>
+<head>
+    <title>RouterAI Proxy — выбор провайдера и контроль цен</title>
+    <style>
+        body { font-family: sans-serif; max-width: 1250px; margin: 30px auto; padding: 0 20px; background: #f4f6f9; color: #333; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .filter-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; background: #e9ecef; padding: 20px; border-radius: 8px; margin-bottom: 25px; }
+        .filter-group { display: flex; flex-direction: column; position: relative; }
+        .filter-group label { font-size: 13px; font-weight: bold; margin-bottom: 5px; color: #495057; }
+        .filter-group input { padding: 8px; padding-right: 26px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px; }
+        /* Крестик очистки: показываем, только когда в поле что-то введено */
+        .filter-clear {
+            position: absolute; left: auto; right: 7px; bottom: 8px;
+            border: none; background: none; cursor: pointer; padding: 0 2px;
+            font-size: 15px; line-height: 1; color: #adb5bd; display: none;
+        }
+        .filter-clear:hover { color: #495057; }
+        .filter-group input:not(:placeholder-shown) ~ .filter-clear { display: block; }
+        .model-section { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 25px; border-left: 5px solid #007bff; }
+        .btn { background: #007bff; color: white; padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;}
+        .btn-success { background: #28a745; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+        th, td { padding: 8px 12px; border-bottom: 1px solid #ddd; text-align: left; }
+        th { background: #f8f9fa; color: #555; }
+        .alert { padding: 15px; background: #f8d7da; color: #721c24; border-radius: 4px; border: 1px solid #f5c6cb; margin-bottom: 20px; }
+        .model-title { margin: 0 0 10px 0; color: #111; font-size: 18px; }
+        .model-id { color: #666; font-size: 13px; font-weight: normal; margin-left: 10px; }
+        .toggle-hidden-btn { background: none; border: none; color: #007bff; cursor: pointer; font-size: 13px; padding: 0; margin-bottom: 10px; display: none; align-items: center; font-weight: bold; }
+        .toggle-hidden-btn:hover { text-decoration: underline; }
+        .toggle-hidden-btn .arrow { margin-right: 5px; transition: transform 0.2s; display: inline-block; }
+        .toggle-hidden-btn.expanded .arrow { transform: rotate(90deg); }
+        .filtered-out { color: cadetblue; }
+        /* Единый стиль значений хоста и тега в блоке профиля */
+        .profile-val { font-size: 16px; font-weight: bold; }
+    </style>
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+</head>
+<body>
+    <h1>RouterAI Proxy — выбор провайдера и контроль цен</h1>
+
+    <div style="display: flex; gap: 20px; align-items: stretch; margin-bottom: 20px;">
+        <div class="card" id="profile-info" style="flex: 1; margin-bottom: 0;">
+            <h3>Зафиксированный рабочий профиль в OpenCode</h3>
+            <!-- PROFILE_INFO -->
+        </div>
+        <div class="card" style="width: 28%; margin-bottom: 0;">
+            <h3>Настройки</h3>
+            <label style="font-weight: normal; cursor: pointer; display: block; margin-bottom: 10px;">
+                <input type="checkbox" id="logging-toggle" <!-- LOGGING_CHECKED --> onchange="toggleLogging(this.checked)"> Включить запись в proxy.log
+            </label>
+            <label style="font-weight: normal; cursor: pointer; display: block;">
+                <input type="checkbox" id="auto-open-toggle" <!-- AUTO_OPEN_CHECKED --> onchange="toggleAutoOpen(this.checked)"> Авто-открытие панели при блокировке
+            </label>
+            <hr style="border: none; border-top: 1px solid #ddd; margin: 12px 0;">
+            <button class="btn" style="width: 100%;" onclick="exportOpencodeConfig(this)" title="Создать opencode.jsonc в папке скрипта для работы через прокси">Выгрузить конфиг OpenCode</button>
+            <small id="export-result" style="display: block; margin-top: 8px; color: #666;"></small>
+            <hr style="border: none; border-top: 1px solid #ddd; margin: 12px 0;">
+            <label style="font-weight: normal; cursor: pointer; display: block; margin-bottom: 8px;">
+                <input type="checkbox" id="opencode-replace-toggle" <!-- OPENCODE_REPLACE_CHECKED --> onchange="toggleOpencodeReplace(this.checked)" title="Конфиг обновится сразу при нажатии «Выбрать»"> Разрешить изменение существующего конфига
+                <small style="display: block; color: #6c757d; font-weight: normal; margin-top: 2px;">при нажатии «Выбрать» конфиг обновится сразу</small>
+            </label>
+            <label style="font-size: 13px; color: #495057; display: block; margin-bottom: 4px;">Путь к конфигу OpenCode</label>
+            <input type="text" id="opencode-config-path" placeholder="~/.config/opencode/opencode.jsonc" value="<!-- OPENCODE_CONFIG_PATH -->" style="width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px; margin-bottom: 8px;" disabled onchange="saveOpencodePath(this.value)">
+            <small id="opencode-update-result" style="display: block; margin-top: 8px; color: #666;"></small>
+        </div>
+    </div>
+
+    <!-- ПАНЕЛЬ ФИЛЬТРАЦИИ ДО КОНКРЕТНОГО ПРОВАЙДЕРА -->
+    <div class="filter-panel">
+        <div class="filter-group">
+            <label>Фильтр по ID модели</label>
+            <input type="text" id="filter-model-id" placeholder="например: gpt" value="<!-- FILTER_MODEL_ID -->" oninput="applyFilters()">
+            <button type="button" class="filter-clear" onclick="clearFilter('filter-model-id')" title="Очистить">✕</button>
+        </div>
+        <div class="filter-group">
+            <label>Минимум Контекста (тыс. ток.)</label>
+            <input type="number" id="filter-context" placeholder="Например: 262" value="<!-- FILTER_CONTEXT -->" oninput="applyFilters()">
+            <button type="button" class="filter-clear" onclick="clearFilter('filter-context')" title="Очистить">✕</button>
+        </div>
+        <div class="filter-group">
+            <label>Макс. цена Входа (за 1М ток.)</label>
+            <input type="number" id="filter-input-price" step="0.5" placeholder="Макс ₽ за вход" value="<!-- FILTER_INPUT_PRICE -->" oninput="applyFilters()">
+            <button type="button" class="filter-clear" onclick="clearFilter('filter-input-price')" title="Очистить">✕</button>
+        </div>
+        <div class="filter-group">
+            <label>Макс. цена Выхода (за 1М ток.)</label>
+            <input type="number" id="filter-output-price" step="0.5" placeholder="Макс ₽ за выход" value="<!-- FILTER_OUTPUT_PRICE -->" oninput="applyFilters()">
+            <button type="button" class="filter-clear" onclick="clearFilter('filter-output-price')" title="Очистить">✕</button>
+        </div>
+        <div class="filter-group">
+            <label>Макс. цена Кэша (за 1М ток.)</label>
+            <input type="number" id="filter-cache-price" step="0.5" placeholder="Макс ₽ за кэш" value="<!-- FILTER_CACHE_PRICE -->" oninput="applyFilters()">
+            <button type="button" class="filter-clear" onclick="clearFilter('filter-cache-price')" title="Очистить">✕</button>
+        </div>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <h2 style="margin: 0;">Список провайдеров:</h2>
+        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <small style="color: #666;">Данные моделей обновлены: <span id="cache-date"><!-- CACHE_DATE --></span></small>
+                <button class="btn" onclick="loadCatalog()" title="Загрузить список моделей и провайдеров">Обновить модели</button>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <label id="cmp-all-wrap" style="font-size: 13px; cursor: pointer; white-space: nowrap;" title="Выбрать к сравнению все видимые (прошедшие фильтр) провайдеры">
+                    <input type="checkbox" id="cmp-check-all" onchange="toggleCompareAll(this)"> все
+                </label>
+                <button class="btn" id="compare-btn" onclick="openCompare()" title="Сравнить затраты отмеченных провайдеров" disabled>Сравнение затрат (0)</button>
+            </div>
+        </div>
+    </div>
+    <div id="catalog-container">
+        <p style="color: gray; font-style: italic; text-align: center; padding: 40px;">Список моделей не загружен. Нажмите «Обновить модели» для загрузки.</p>
+        <!-- CATALOG_DATA -->
+    </div>
+
+    <style>
+        #compare-modal {
+            display: none; position: fixed; inset: 0; z-index: 1000;
+            background: rgba(0,0,0,.5); overflow: auto; padding: 30px 10px;
+        }
+        #compare-box {
+            background: #fff; max-width: 1180px; margin: 0 auto; padding: 20px 24px;
+            border-radius: 8px; position: relative; box-shadow: 0 4px 24px rgba(0,0,0,.25);
+        }
+        #compare-close {
+            position: absolute; top: 10px; right: 16px; border: none; background: none;
+            font-size: 26px; line-height: 1; cursor: pointer; color: #666;
+        }
+        #compare-close:hover { color: #000; }
+        .cmp-chip {
+            display: inline-block; background: #e7f1ff; border: 1px solid #b6d4fe;
+            border-radius: 12px; padding: 3px 10px; margin: 0 6px 6px 0; font-size: 13px;
+        }
+        /* Плашки: по умолчанию видны две строки, остальное раскрывается */
+        .cmp-chips-box { display: block; overflow: hidden; }
+        .cmp-chip a { color: #721c24; text-decoration: none; margin-left: 4px; font-weight: bold; }
+        .cmp-chip a:hover { color: #c00; }
+        #compare-table { overflow-x: auto; }
+        /* border-collapse: separate — иначе границы прилипших ячеек в Chrome рвутся */
+        #compare-table table { border-collapse: separate; border-spacing: 0; font-size: 13px; table-layout: fixed; }
+        #compare-table th, #compare-table td {
+            border-bottom: 1px solid #dee2e6; border-right: 1px solid #dee2e6;
+            padding: 6px 8px; text-align: left; vertical-align: top;
+        }
+        #compare-table th:first-child, #compare-table td:first-child { border-left: 1px solid #dee2e6; }
+        #compare-table th { background: #f1f3f5; font-size: 12px; }
+        #compare-table th:first-child { width: 250px; }
+        #compare-table td:not(:first-child) { text-align: right; min-width: 130px; }
+        /* Колонка «Сценарий» не уезжает при горизонтальной прокрутке */
+        #compare-table th:first-child, #compare-table td:first-child {
+            position: sticky; left: 0; z-index: 2; background: #fff;
+            box-shadow: 2px 0 0 #dee2e6;
+        }
+        #compare-table thead th:first-child { z-index: 3; background: #f1f3f5; }
+        /* Числа вводятся только текстом — убираем стрелки спиннера */
+        #compare-table input { width: 100%; box-sizing: border-box; padding: 3px 3px; border: 1px solid #ced4da; border-radius: 3px; font-size: 11px; }
+        #compare-table input::-webkit-outer-spin-button,
+        #compare-table input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        #compare-table input { -moz-appearance: textfield; appearance: textfield; }
+        /* Одна сетка на все таблички: токены сценариев, свои поля ввода и разбивка цен */
+        .cmp-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 4px; margin-top: 4px; }
+        .cmp-grid .cmp-field { min-width: 0; }
+        .cmp-grid .cmp-label { display: block; font-size: 10px; line-height: 1.15; color: #6c757d; }
+        .cmp-grid .cmp-val { display: block; font-size: 10px; line-height: 1.3; color: #343a40; }
+        /* Места в строке «Свой сценарий»: 1-е зелёным, 2-е голубым.
+           Подсветка занимает всю строку цены, а не ячейку: разбивка и
+           предупреждение остаются на обычном фоне. */
+        #compare-table td.cmp-rank1 > b { background: #d4edda; display: block; }
+        #compare-table td.cmp-rank2 > b { background: #d1ecf1; display: block; }
+        /* Предупреждение — своей плашкой, чтобы читалось на любом фоне */
+        .cmp-warn {
+            display: inline-block; background: #fff8e6; color: #856404;
+            border-radius: 3px; padding: 1px 4px; font-size: 11px; margin-top: 3px;
+        }
+        #compare-table input { width: 100%; box-sizing: border-box; padding: 3px 3px; border: 1px solid #ced4da; border-radius: 3px; font-size: 11px; }
+        .cmp-detail { font-size: 11px; color: #6c757d; margin-top: 2px; line-height: 1.35; }
+        .cmp-warn { font-size: 11px; color: #856404; margin-top: 3px; }
+        .cmp-cell-warn { background: #fff8e6; }
+        .cmp-na { color: #6c757d; font-style: italic; text-align: center !important; }
+        .cmp-hint { font-size: 13px; color: #495057; margin: 0 0 12px 0; }
+    </style>
+
+    <div id="compare-modal" onclick="if (event.target === this) closeCompare()">
+        <div id="compare-box">
+            <button id="compare-close" onclick="closeCompare()" title="Закрыть (Esc)">&times;</button>
+            <h2 style="margin: 0 0 12px 0;">Сравнение затрат</h2>
+            <div id="compare-variants"></div>
+            <div id="compare-table"></div>
+            <p id="compare-note" style="font-size: 12px; color: #6c757d; margin: 14px 0 0 0;">
+                Расчёт по базовым ценам провайдера: кэш-чтение по цене кэша, а если провайдер её не
+                публикует — по полной цене входа; токены рассуждений по своей цене, иначе по цене выхода.
+                Ночные тарифы не учитываются. Качество моделей не сравнивается — только цена.
+                Отметки держатся до перезагрузки страницы и никуда не сохраняются.
+            </p>
+        </div>
+    </div>
+
+    <script>
+    function saveFilters() {
+        const filters = {
+            modelId: document.getElementById('filter-model-id').value,
+            context: document.getElementById('filter-context').value,
+            inputPrice: document.getElementById('filter-input-price').value,
+            outputPrice: document.getElementById('filter-output-price').value,
+            cachePrice: document.getElementById('filter-cache-price').value
+        };
+        localStorage.setItem('routerai-filters', JSON.stringify(filters));
+        saveFiltersAsync(filters);
+    }
+
+    function toggleLogging(enabled) {
+        const formData = new URLSearchParams();
+        formData.append('enabled', enabled ? 'true' : 'false');
+        fetch('/api/toggle_logging', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: formData.toString()
+        }).catch(() => {});
+    }
+
+    function toggleAutoOpen(enabled) {
+        const formData = new URLSearchParams();
+        formData.append('enabled', enabled ? 'true' : 'false');
+        fetch('/api/toggle_auto_open', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: formData.toString()
+        }).catch(() => {});
+    }
+
+    function exportOpencodeConfig(btn) {
+        const result = document.getElementById('export-result');
+        result.style.color = '#666';
+        result.textContent = 'Выгрузка...';
+        fetch('/api/export_opencode_config', {method: 'POST', cache: 'no-store'})
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    result.style.color = '#28a745';
+                    result.textContent = 'Создан: ' + data.path;
+                } else {
+                    result.style.color = '#721c24';
+                    result.textContent = 'Ошибка: ' + (data.error || 'неизвестно');
+                }
+            })
+            .catch(() => {
+                result.style.color = '#721c24';
+                result.textContent = 'Ошибка запроса';
+            });
+    }
+
+    function toggleOpencodeReplace(enabled) {
+        // Поле пути активно только при включённом чекбоксе
+        document.getElementById('opencode-config-path').disabled = !enabled;
+
+        const formData = new URLSearchParams();
+        formData.append('enabled', enabled ? 'true' : 'false');
+        fetch('/api/toggle_opencode_replace', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: formData.toString()
+        }).catch(() => {});
+    }
+
+    function saveOpencodePath(path) {
+        const result = document.getElementById('opencode-update-result');
+        result.style.color = '#666';
+        result.textContent = 'Сохранение пути...';
+        const formData = new URLSearchParams();
+        formData.append('path', path || '');
+        fetch('/api/save_opencode_path', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: formData.toString()
+        })
+            .then(r => r.json())
+            .then(data => {
+                result.style.color = data.status === 'ok' ? '#28a745' : '#721c24';
+                result.textContent = data.status === 'ok' ? 'Путь сохранён' : ('Ошибка: ' + (data.error || ''));
+            })
+            .catch(() => {
+                result.style.color = '#721c24';
+                result.textContent = 'Ошибка сохранения пути';
+            });
+    }
+
+    // Обновление существующего конфига OpenCode. Вызывается автоматически из
+    // selectProvider, если включён чекбокс разрешения правки.
+    function updateOpencodeConfig() {
+        const result = document.getElementById('opencode-update-result');
+        result.style.color = '#666';
+        result.textContent = 'Обновление конфига...';
+        fetch('/api/update_opencode_config', {method: 'POST', cache: 'no-store'})
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    result.style.color = '#28a745';
+                    result.textContent = data.message;
+                } else {
+                    result.style.color = '#721c24';
+                    result.textContent = 'Конфиг не обновлён: ' + (data.error || 'неизвестно');
+                }
+            })
+            .catch(() => {
+                result.style.color = '#721c24';
+                result.textContent = 'Ошибка запроса при обновлении конфига';
+            });
+    }
+
+    // Правка конфига — сразу после выбора провайдера, если это разрешено
+    function maybeUpdateOpencodeConfig() {
+        if (document.getElementById('opencode-replace-toggle').checked) updateOpencodeConfig();
+    }
+
+    function loadFilters() {
+        const saved = localStorage.getItem('routerai-filters');
+        if (saved) {
+            try {
+                const filters = JSON.parse(saved);
+                if (filters.modelId) document.getElementById('filter-model-id').value = filters.modelId;
+                if (filters.context) document.getElementById('filter-context').value = filters.context;
+                if (filters.inputPrice) document.getElementById('filter-input-price').value = filters.inputPrice;
+                if (filters.outputPrice) document.getElementById('filter-output-price').value = filters.outputPrice;
+                if (filters.cachePrice) document.getElementById('filter-cache-price').value = filters.cachePrice;
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    function saveFiltersAsync(filters) {
+        const formData = new URLSearchParams();
+        formData.append('filter_model_id', filters.modelId || '');
+        formData.append('filter_context', filters.context || '');
+        formData.append('filter_input_price', filters.inputPrice || '');
+        formData.append('filter_output_price', filters.outputPrice || '');
+        formData.append('filter_cache_price', filters.cachePrice || '');
+
+        fetch('/api/save_filters', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: formData.toString()
+        }).catch(() => {});
+    }
+
+    // Крестик в поле фильтра: чистим значение и применяем фильтр заново
+    function clearFilter(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = '';
+        applyFilters();
+        el.focus();
+    }
+
+    function applyFilters() {
+        saveFilters();
+        const modelIdFilter = (document.getElementById('filter-model-id').value || '').trim().toLowerCase();
+        const reqContextK = parseFloat(document.getElementById('filter-context').value) || 0;
+        const maxInput = parseFloat(document.getElementById('filter-input-price').value) || Infinity;
+        const maxOutput = parseFloat(document.getElementById('filter-output-price').value) || Infinity;
+        const maxCache = parseFloat(document.getElementById('filter-cache-price').value) || Infinity;
+
+        const modelSections = document.querySelectorAll('.model-section');
+        modelSections.forEach(section => {
+            // Фильтр по ID модели — скрывает всю секцию при несовпадении
+            const modelIdCell = section.querySelector('.model-id code');
+            const modelId = modelIdCell ? modelIdCell.textContent.trim().toLowerCase() : '';
+            if (modelIdFilter && !modelId.includes(modelIdFilter)) {
+                section.style.display = 'none';
+                return;
+            }
+
+            const rows = section.querySelectorAll('.provider-row');
+            let visibleRowsInModel = 0;
+            let hiddenRowsInModel = 0;
+
+            const toggleBtn = section.querySelector('.toggle-hidden-btn');
+            const isCurrentlyExpanded = toggleBtn ? toggleBtn.classList.contains('expanded') : false;
+
+            rows.forEach(row => {
+                const rowContextRaw = parseFloat(row.getAttribute('data-context-raw')) || 0;
+                const rowContextK = rowContextRaw / 1000;
+                const rowInput = parseFloat(row.getAttribute('data-input')) || 0;
+                const rowOutput = parseFloat(row.getAttribute('data-output')) || 0;
+                const rowCache = parseFloat(row.getAttribute('data-cache')) || 0;
+
+                const matchesContext = (rowContextK >= reqContextK);
+                const matchesPrices = (rowInput <= maxInput) && (rowOutput <= maxOutput) && (rowCache <= maxCache);
+                const isMatched = matchesContext && matchesPrices;
+
+                const tagCell = row.querySelector('td:nth-child(2) code');
+                const providerTag = tagCell ? tagCell.textContent : '';
+                const assocRows = section.querySelectorAll('.variable-pricing-row[data-provider-assoc="' + providerTag + '"]');
+
+                if (isMatched) {
+                    row.classList.remove('filtered-out');
+                    row.style.display = '';
+                    assocRows.forEach(r => { r.classList.remove('filtered-out'); r.style.display = ''; });
+                    visibleRowsInModel++;
+                } else {
+                    row.classList.add('filtered-out');
+                    assocRows.forEach(r => r.classList.add('filtered-out'));
+                    if (isCurrentlyExpanded) {
+                        row.style.display = '';
+                        assocRows.forEach(r => r.style.display = '');
+                    } else {
+                        row.style.display = 'none';
+                        assocRows.forEach(r => r.style.display = 'none');
+                    }
+                    hiddenRowsInModel++;
+                }
+            });
+
+            // Управление кнопкой «Показать остальных»
+            if (toggleBtn) {
+                if (hiddenRowsInModel > 0 && visibleRowsInModel > 0) {
+                    toggleBtn.style.display = 'flex';
+                    toggleBtn.setAttribute('data-count', hiddenRowsInModel);
+                    if (!isCurrentlyExpanded) {
+                        toggleBtn.innerHTML = '<span class="arrow">▶</span> Показать остальных (' + hiddenRowsInModel + ')';
+                    }
+                } else {
+                    toggleBtn.style.display = 'none';
+                    toggleBtn.classList.remove('expanded');
+                }
+            }
+
+            if (visibleRowsInModel > 0 || (hiddenRowsInModel > 0 && isCurrentlyExpanded)) {
+                section.style.display = '';
+            } else {
+                section.style.display = 'none';
+            }
+        });
+        // Видимость строк изменилась — пересчитываем чекбоксы «все»
+        if (typeof cmpSyncGroupBoxes === 'function') cmpSyncGroupBoxes();
+    }
+
+    function toggleHiddenProviders(btn) {
+        const section = btn.closest('.model-section');
+        const isExpanded = btn.classList.contains('expanded');
+        btn.classList.toggle('expanded');
+        const count = btn.getAttribute('data-count') || '0';
+
+        if (isExpanded) {
+            btn.innerHTML = '<span class="arrow">▶</span> Показать остальных (' + count + ')';
+            section.querySelectorAll('.filtered-out').forEach(item => item.style.display = 'none');
+        } else {
+            btn.innerHTML = '<span class="arrow">▼</span> Скрыть остальных';
+            section.querySelectorAll('.filtered-out').forEach(item => item.style.display = '');
+        }
+        if (typeof cmpSyncGroupBoxes === 'function') cmpSyncGroupBoxes();
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        // Инициализируем кнопки-стрелки для каталога, отрендеренного из кэша
+        document.querySelectorAll('.model-section').forEach(section => {
+            if (!section.querySelector('.toggle-hidden-btn')) {
+                const btn = document.createElement('button');
+                btn.className = 'toggle-hidden-btn';
+                btn.setAttribute('onclick', 'toggleHiddenProviders(this)');
+                btn.innerHTML = '<span class="arrow">▶</span> Показать остальных';
+                section.appendChild(btn);
+            }
+        });
+        if (loadFilters()) {
+            applyFilters();
+        }
+        // Состояние поля пути должно отвечать чекбоксу сразу при загрузке,
+        // а не только после того как пользователь ткнёт в чекбокс
+        document.getElementById('opencode-config-path').disabled =
+            !document.getElementById('opencode-replace-toggle').checked;
+        checkPriceChanges();
+        setInterval(checkPriceChanges, 30000);
+    });
+
+    function insertToggleButtons() {
+        document.querySelectorAll('.model-section').forEach(section => {
+            if (!section.querySelector('.toggle-hidden-btn')) {
+                const btn = document.createElement('button');
+                btn.className = 'toggle-hidden-btn';
+                btn.setAttribute('onclick', 'toggleHiddenProviders(this)');
+                btn.innerHTML = '<span class="arrow">▶</span> Показать остальных';
+                section.appendChild(btn);
+            }
+        });
+    }
+
+    function updateCacheDate() {
+        fetch('/api/cache_date', {cache: 'no-store'})
+            .then(r => r.json())
+            .then(data => {
+                const el = document.getElementById('cache-date');
+                if (el && data.cache_date) el.textContent = data.cache_date;
+            })
+            .catch(() => {});
+    }
+
+    function loadCatalog() {
+        const container = document.getElementById('catalog-container');
+        // Каталог из кэша уже отрендерен при открытии страницы —
+        // кнопка выполняет полное обновление из API
+        container.innerHTML = '<p style="color: gray; text-align: center; padding: 40px;">Загрузка моделей из RouterAI...</p>';
+        fetch('/api/catalog?refresh=1', {cache: 'no-store'})
+            .then(r => r.text())
+            .then(html => {
+                container.innerHTML = html;
+                insertToggleButtons();
+                applyFilters();
+                cmpSync();
+                updateCacheDate();
+            })
+            .catch(() => {
+                container.innerHTML = '<p style="color: red; text-align: center; padding: 40px;">Ошибка загрузки каталога. Проверьте proxy.log</p>';
+            });
+    }
+
+    function selectProvider(modelId, providerTag, prompt, completion, cache) {
+        const formData = new URLSearchParams();
+        formData.append('model_id', modelId);
+        formData.append('provider_tag', providerTag);
+        formData.append('prompt', prompt);
+        formData.append('completion', completion);
+        formData.append('cache', cache);
+
+        fetch('/api/select', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: formData.toString()
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'ok') {
+                updateProfileBlock(data.profile);
+                highlightSelectedRow(modelId, providerTag);
+                // Если разрешена правка конфига — обновляем его сразу
+                maybeUpdateOpencodeConfig();
+            }
+        })
+        .catch(() => {});
+    }
+
+    function updateProfileBlock(profile) {
+        const block = document.getElementById('profile-info');
+        if (!block || !profile) return;
+        const name = (profile.model_name && profile.model_name !== profile.model)
+            ? profile.model_name : profile.model;
+        // Обе величины в одну строку; пропускаем те, которых нет в каталоге
+        const tokens = [profile.context, profile.output].filter(v => v && v !== '—');
+        const tokensHtml = tokens.length
+            ? '<p><strong>Контекст / Выход:</strong> <strong>' + tokens.join(' / ') + '</strong> токенов</p>' : '';
+        const valStyle = 'profile-val';
+        const provName = profile.provider_name
+            ? '<span class="' + valStyle + '">' + profile.provider_name + '</span>' +
+              (profile.quantization ? ' <small style="color:gray;">' + profile.quantization + '</small>' : '')
+            : '';
+        const tagDisplay = '<span class="' + valStyle + '">' + profile.provider + '</span>';
+        const extraHtml = (profile.extra_prices && profile.extra_prices.trim())
+            ? '<p><strong>Дополнительно:</strong><br>' + profile.extra_prices.replace(/^<br>/, '') + '</p>' : '';
+        block.innerHTML = '<h3>Зафиксированный рабочий профиль в OpenCode</h3>' +
+            '<p style="margin-bottom: 10px;">' +
+                '<span style="font-size: 16px;"><strong>' + name + '</strong></span>' +
+                '<span style="color: #666; font-size: 13px; margin-left: 10px;">ID: <code>' + profile.model + '</code></span>' +
+            '</p>' +
+            '<p><strong>Провайдер (Хост):</strong> ' + provName + '</p>' +
+            '<p><strong>Тег провайдера:</strong> ' + tagDisplay + '</p>' +
+            tokensHtml +
+            '<p><strong>Цена фиксации (за 1М токенов):</strong> ' +
+            'Вх: <span style="color:#28a745;font-weight:bold;">' + profile.prompt + ' ₽</span> | ' +
+            'Вых: <span style="color:#28a745;font-weight:bold;">' + profile.completion + ' ₽</span> | ' +
+            'Кэш чтения: <span style="color:#28a745;font-weight:bold;">' + profile.cache + ' ₽</span> | ' +
+            'Кэш записи: <span style="color:#28a745;font-weight:bold;">' + (profile.cache_write || '0.00') + ' ₽</span></p>' +
+            extraHtml +
+            '<p style="margin-top: 8px;">' +
+                '<a href="https://routerai.ru/models/' + profile.model + '" target="_blank" style="font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>' +
+                '<a href="https://routerai.ru/api/v1/models/' + profile.model + '/endpoints" target="_blank" style="font-size: 13px; color: #28a745; text-decoration: none; margin-left: 10px;">[Endpoints ↗]</a>' +
+            '</p>';
+    }
+
+    function highlightSelectedRow(modelId, providerTag) {
+        const rows = document.querySelectorAll('.provider-row');
+        rows.forEach(row => {
+            row.style.background = '';
+            // Подсвечиваем только строку с совпадением И модели, И провайдера
+            const tagCell = row.querySelector('td:nth-child(2) code');
+            const modelSection = row.closest('.model-section');
+            const modelIdCell = modelSection ? modelSection.querySelector('.model-id code') : null;
+            const rowModelId = modelIdCell ? modelIdCell.textContent.trim() : '';
+            if (tagCell && tagCell.textContent === providerTag && rowModelId === modelId) {
+                row.style.background = '#e2f0d9';
+            }
+        });
+    }
+
+    function checkPriceChanges() {
+        fetch('/api/price_changes')
+            .then(r => r.json())
+            .then(data => {
+                const profileBlock = document.getElementById('profile-info');
+                const statusId = 'profile-block-status';
+
+                // Удаляем старый статус из блока профиля
+                const oldStatus = document.getElementById(statusId);
+                if (oldStatus) oldStatus.remove();
+
+                // На случай, если баннер остался от прошлой версии — убираем
+                const oldBanner = document.getElementById('price-change-banner');
+                if (oldBanner) oldBanner.remove();
+
+                // Статус блокировки — только в блоке профиля
+                if (data.is_blocked && data.block_reason && profileBlock) {
+                    const el = document.createElement('p');
+                    el.id = statusId;
+                    el.style.cssText = 'padding:12px;background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;border-radius:4px;margin-top:10px;';
+                    el.innerHTML = '<strong>[ЗАПРОСЫ ЗАБЛОКИРОВАНЫ]</strong><br>' + data.block_reason +
+                        '<br><small>Выберите модель ниже, чтобы применить новые цены и снять блокировку.</small>';
+                    profileBlock.appendChild(el);
+                }
+            })
+            .catch(() => {});
+    }
+
+    // === СРАВНЕНИЕ ЗАТРАТ ===
+    // Варианты (до 5 пар модель+провайдер) и сценарии в токенах.
+    // Ничего не храним: состояние живёт только в памяти страницы.
+    const CMP_MAX = Infinity;   // лимит вариантов снят по просьбе пользователя
+    const CMP_SCENARIOS = [
+        {name: 'Короткий вопрос',            inp: 1000,  out: 500,   rea: 0,     cr: 0},
+        {name: 'Классификация данных',        inp: 2000,  out: 300,   rea: 200,   cr: 0},
+        {name: 'Написание / редактирование',  inp: 3000,  out: 1500,  rea: 500,   cr: 0},
+        {name: 'Анализ документа',            inp: 20000, out: 2000,  rea: 2000,  cr: 0},
+        {name: 'База знаний',                 inp: 2000,  out: 800,   rea: 400,   cr: 50000},
+        {name: 'Лёгкая разработка',           inp: 5000,  out: 2000,  rea: 1000,  cr: 30000},
+        {name: 'Средняя разработка',          inp: 15000, out: 6000,  rea: 4000,  cr: 150000},
+        {name: 'Тяжёлая разработка',          inp: 40000, out: 15000, rea: 15000, cr: 600000}
+    ];
+    const cmpCustom = {name: 'Свой сценарий', inp: 0, out: 0, rea: 0, cr: 0};
+    let cmpVariants = [];
+    let cmpToastTimer = null;
+
+    function cmpTok(v) {
+        v = Math.round(v);
+        if (v >= 1000000) return (v / 1000000) + 'M';
+        if (v >= 1000) return Math.round(v / 1000) + 'K';
+        return String(v);
+    }
+    function cmpGroup(v) {  // 600000 → «600 000»
+        return String(Math.round(v)).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' ');
+    }
+    function cmpRub(v) { return v >= 0.01 ? v.toFixed(2) : v.toFixed(3); }
+    function cmpNum(el, attr) { return parseFloat(el.getAttribute(attr)) || 0; }
+    function cmpEsc(s) {
+        return String(s).replace(/[&<>"']/g,
+            c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+    }
+
+    function cmpToast(msg) {
+        let t = document.getElementById('cmp-toast');
+        if (!t) {
+            t = document.createElement('div');
+            t.id = 'cmp-toast';
+            t.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);' +
+                'background:#fff3cd;border:1px solid #ffe69c;color:#856404;padding:8px 16px;' +
+                'border-radius:6px;z-index:2000;font-size:13px;box-shadow:0 2px 10px rgba(0,0,0,.15);';
+            document.body.appendChild(t);
+        }
+        t.textContent = msg;
+        t.style.display = 'block';
+        clearTimeout(cmpToastTimer);
+        cmpToastTimer = setTimeout(() => { t.style.display = 'none'; }, 3500);
+    }
+
+    function cmpKey(row) {
+        return row.getAttribute('data-model') + '|' + row.getAttribute('data-tag');
+    }
+
+    function cmpReadRow(row) {
+        return {
+            key: cmpKey(row),
+            model: row.getAttribute('data-model-name') || row.getAttribute('data-model'),
+            tag: row.getAttribute('data-tag'),
+            provider: row.getAttribute('data-provider'),
+            input: cmpNum(row, 'data-input'),
+            output: cmpNum(row, 'data-output'),
+            cache: cmpNum(row, 'data-cache'),
+            reasoning: cmpNum(row, 'data-reasoning'),
+            request: cmpNum(row, 'data-request'),
+            ctx: cmpNum(row, 'data-context-raw'),
+            maxOut: cmpNum(row, 'data-max-tokens')
+        };
+    }
+
+    function toggleCompare(cb) {
+        const row = cb.closest('tr');
+        const key = cmpKey(row);
+        if (cb.checked) {
+            if (!cmpVariants.some(v => v.key === key)) cmpVariants.push(cmpReadRow(row));
+        } else {
+            cmpVariants = cmpVariants.filter(v => v.key !== key);
+        }
+        cmpSync();
+    }
+
+    // Строки, реально видимые после фильтров (скрытые — вместе с родительским блоком).
+    // offsetParent для <tr> всегда null, поэтому смотрим через getClientRects.
+    function cmpVisibleRows() {
+        return [...document.querySelectorAll('tr.provider-row')]
+            .filter(r => r.getClientRects().length > 0);
+    }
+
+    // Чекбоксы «все»: глобальный (по видимым строкам) и в шапке каждой модели
+    function cmpSyncGroupBoxes() {
+        const keys = new Set(cmpVariants.map(v => v.key));
+
+        const visible = cmpVisibleRows();
+        const all = document.getElementById('cmp-check-all');
+        if (all) {
+            const sel = visible.filter(r => keys.has(cmpKey(r))).length;
+            all.checked = visible.length > 0 && sel === visible.length;
+            all.indeterminate = sel > 0 && sel < visible.length;
+        }
+
+        document.querySelectorAll('.cmp-check-model').forEach(box => {
+            const model = box.getAttribute('data-model');
+            const rows = [...document.querySelectorAll('tr.provider-row')]
+                .filter(r => r.getAttribute('data-model') === model);
+            const sel = rows.filter(r => keys.has(cmpKey(r))).length;
+            box.checked = rows.length > 0 && sel === rows.length;
+            box.indeterminate = sel > 0 && sel < rows.length;
+        });
+    }
+
+    // Снятие группы: удаляем варианты из массива, иначе cmpSync() вернёт галочки
+    function cmpUnselectRows(rows) {
+        const remove = new Set(rows.map(cmpKey));
+        cmpVariants = cmpVariants.filter(v => !remove.has(v.key));
+    }
+
+    function toggleCompareAll(cb) {
+        const rows = cmpVisibleRows();
+        const keys = new Set(cmpVariants.map(v => v.key));
+        if (rows.length > 0 && rows.every(r => keys.has(cmpKey(r)))) {
+            cmpUnselectRows(rows);          // все видимые выбраны — снимаем их
+        } else {
+            rows.forEach(r => {
+                if (!keys.has(cmpKey(r))) cmpVariants.push(cmpReadRow(r));
+            });
+        }
+        cmpSync();
+    }
+
+    function toggleCompareModel(cb, model) {
+        const rows = [...document.querySelectorAll('tr.provider-row')]
+            .filter(r => r.getAttribute('data-model') === model);
+        const keys = new Set(cmpVariants.map(v => v.key));
+        if (rows.length > 0 && rows.every(r => keys.has(cmpKey(r)))) {
+            cmpUnselectRows(rows);          // вся модель выбрана — снимаем её
+        } else {
+            rows.forEach(r => {
+                if (!keys.has(cmpKey(r))) cmpVariants.push(cmpReadRow(r));
+            });
+        }
+        cmpSync();
+    }
+
+    // Приводит чекбоксы в строках в соответствие с выбранными вариантами
+    function cmpSync() {
+        const keys = new Set(cmpVariants.map(v => v.key));
+        document.querySelectorAll('.cmp-check').forEach(cb => {
+            const row = cb.closest('tr');
+            if (row) cb.checked = keys.has(cmpKey(row));
+        });
+        cmpSyncGroupBoxes();
+        const btn = document.getElementById('compare-btn');
+        if (btn) {
+            btn.textContent = 'Сравнение затрат (' + cmpVariants.length + ')';
+            btn.disabled = cmpVariants.length === 0;
+        }
+        if (document.getElementById('compare-modal').style.display !== 'none') cmpRender();
+    }
+
+    function cmpRemove(i) {
+        cmpVariants.splice(i, 1);
+        cmpSync();
+    }
+
+    function cmpReset() {
+        cmpVariants = [];
+        cmpSync();
+    }
+
+    function openCompare() {
+        document.getElementById('compare-modal').style.display = 'block';
+        document.body.style.overflow = 'hidden';
+        cmpRender();
+    }
+
+    function closeCompare() {
+        document.getElementById('compare-modal').style.display = 'none';
+        document.body.style.overflow = '';
+    }
+
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && document.getElementById('compare-modal').style.display !== 'none') closeCompare();
+    });
+
+    // Предупреждения о лимитах: контекст (вход+кэш) и бюджет генерации (выход+рассуждения)
+    function cmpWarn(v, s) {
+        let w = '';
+        const prompt = s.inp + s.cr;
+        if (v.ctx > 0 && prompt > v.ctx) {
+            w += '<div class="cmp-warn">⚠ контекст ' + cmpTok(prompt) + ' &gt; ' + cmpTok(v.ctx) + '</div>';
+        }
+        const gen = s.out + s.rea;
+        if (v.maxOut > 0 && gen > v.maxOut) {
+            w += '<div class="cmp-warn">⚠ выход ' + cmpTok(gen) + ' &gt; ' + cmpTok(v.maxOut) + '</div>';
+        }
+        return w;
+    }
+
+    // Одна табличка на все случаи: подпись сверху, значение снизу.
+    // У пресетов и цен — простой текст, у своего сценария — поле ввода.
+    const cmpFieldInput = (label, val, key, title) =>
+        '<div class="cmp-field"><span class="cmp-label">' + label + '</span>' +
+        '<input type="number" min="0" value="' + val + '" ' +
+        'oninput="cmpCustomInput(this,&quot;' + key + '&quot;)" title="' + title + '"></div>';
+    const cmpFieldText = (label, val) =>
+        '<div class="cmp-field"><span class="cmp-label">' + label + '</span>' +
+        '<span class="cmp-val">' + val + '</span></div>';
+    const cmpMoneyGrid = (pairs) =>
+        '<div class="cmp-grid">' +
+        pairs.map(([l, v]) => cmpFieldText(l, v)).join('') + '</div>';
+
+    // Сумма для пары (вариант, сценарий). null — провайдер с оплатой за запрос,
+    // такие ячейки в рейтинг не входят.
+    function cmpTotalValue(v, s) {
+        if (v.request > 0) return null;
+        const pCache = v.cache > 0 ? v.cache : v.input;
+        const pRea = v.reasoning > 0 ? v.reasoning : v.output;
+        return (s.inp * v.input + s.out * v.output + s.rea * pRea + s.cr * pCache) / 1e6;
+    }
+
+    // Места вариантов в строке сценария: 1-е дешевле, 2-е следующее.
+    // Позиционный рейтинг: при равных ценах первым считается тот, кто раньше
+    // в списке, ровно одно зелёное и одно голубое — иначе при ничьей оба
+    // варианта получали бы первое место и подсветка выглядела залипшей.
+    // Пустая строка (все нули) не ранжируется — иначе светилось бы всё.
+    function cmpRanks(s) {
+        const totals = cmpVariants.map(v => cmpTotalValue(v, s));
+        const valid = totals.filter(t => t !== null && t > 0);
+        if (valid.length < 2) return totals.map(() => '');
+        const order = totals
+            .map((t, i) => ({ t, i }))
+            .filter(x => x.t !== null && x.t > 0)
+            .sort((a, b) => a.t - b.t || a.i - b.i);
+        const res = totals.map(() => '');
+        if (order.length > 0) res[order[0].i] = ' cmp-rank1';
+        if (order.length > 1) res[order[1].i] = ' cmp-rank2';
+        return res;
+    }
+
+    function cmpCell(v, s) {
+        if (v.request > 0) return '<span class="cmp-na">не сравнимо</span>';
+        const cIn = s.inp * v.input / 1e6;
+        const cOut = s.out * v.output / 1e6;
+        const cRea = s.rea * (v.reasoning > 0 ? v.reasoning : v.output) / 1e6;
+        const cCache = s.cr * (v.cache > 0 ? v.cache : v.input) / 1e6;
+        const total = cIn + cOut + cRea + cCache;
+        // Разбивка теми же подписанными столбиками, что и токены в сценариях
+        const grid = cmpMoneyGrid([['вход', cmpRub(cIn)], ['выход', cmpRub(cOut)],
+                                  ['рассужд', cmpRub(cRea)], ['кэш', cmpRub(cCache)]]);
+        return '<b>' + cmpRub(total) + ' ₽</b>' +
+            grid + cmpWarn(v, s);
+    }
+
+    // Плашки вариантов: оставляем две строки, остальное — под «ещё N».
+    // «Сбросить всё» живёт вне этого блока, поэтому не скрывается никогда.
+    const CMP_CHIP_ROWS = 2;
+    function cmpChipPitch(box) {
+        // Шаг строки = расстояние до первой плашки, вставшей на вторую строку
+        const chips = [...box.querySelectorAll('.cmp-chip')];
+        if (!chips.length) return 0;
+        const top = chips[0].offsetTop;
+        const onNextRow = chips.find(c => c.offsetTop > top);
+        if (onNextRow) return onNextRow.offsetTop - top;
+        return chips[0].offsetHeight + 6;      // всё в одну строку
+    }
+
+    function cmpClipChips() {
+        const box = document.getElementById('compare-chips');
+        const toggle = document.getElementById('compare-chips-toggle');
+        if (!box || !toggle) return;
+        const chips = [...box.querySelectorAll('.cmp-chip')];
+        if (chips.length < 3) { toggle.style.display = 'none'; box.style.maxHeight = ''; return; }
+        const pitch = cmpChipPitch(box);
+        const limit = pitch * CMP_CHIP_ROWS;
+        const hidden = chips.filter(c => c.offsetTop >= chips[0].offsetTop + limit).length;
+        if (hidden > 0) {
+            box.style.maxHeight = limit + 'px';
+            toggle.style.display = '';
+            toggle.textContent = 'ещё ' + hidden + ' ▾';
+            toggle.setAttribute('data-expanded', '0');
+        } else {
+            toggle.style.display = 'none';
+            box.style.maxHeight = '';
+        }
+    }
+
+    function toggleCompareChips() {
+        const box = document.getElementById('compare-chips');
+        const toggle = document.getElementById('compare-chips-toggle');
+        if (!box || !toggle) return;
+        if (toggle.getAttribute('data-expanded') === '1') {
+            cmpClipChips();                       // сворачиваем обратно до двух строк
+        } else {
+            box.style.maxHeight = 'none';
+            const chips = [...box.querySelectorAll('.cmp-chip')];
+            toggle.textContent = 'свернуть ▴';
+            toggle.setAttribute('data-expanded', '1');
+            void chips.length;
+        }
+    }
+
+    function cmpRender() {
+        const table = document.getElementById('compare-table');
+        const chips = document.getElementById('compare-variants');
+
+        if (!cmpVariants.length) {
+            chips.innerHTML = '';
+            table.innerHTML = '<p class="cmp-hint">Ничего не выбрано. Отметьте чекбоксом ' +
+                '«сравнить» в строках нужных провайдеров в каталоге — или «все» в шапке ' +
+                'колонки «Действие», чтобы взять всех провайдеров одной модели.</p>';
+            return;
+        }
+
+        chips.innerHTML = '<b style="font-size:13px;">Варианты:</b>' +
+            '<span class="cmp-chips-box" id="compare-chips">' +
+            cmpVariants.map((v, i) =>
+                '<span class="cmp-chip">' + cmpEsc(v.model) +
+                ' <small style="color:#6c757d;">' + cmpEsc(v.tag) + '</small>' +
+                '<a href="#" onclick="cmpRemove(' + i + ');return false;" title="Убрать из сравнения">✕</a></span>'
+            ).join('') +
+            '</span>' +
+            ' <a href="#" id="compare-chips-toggle" onclick="toggleCompareChips();return false;" ' +
+                'style="font-size:13px;display:none;">ещё ▾</a>' +
+            ' <a href="#" onclick="cmpReset();return false;" style="font-size:13px;margin-left:6px;">Сбросить всё</a>' +
+            '<div class="cmp-hint" style="margin-top:6px;">Можно отметить других провайдеров — сколько нужно.</div>';
+        cmpClipChips();
+
+        // Ширина считается от числа колонок: расходы — шире, чтобы сетка разбивки влезала
+        const COL_VAR = 190, COL_SCEN = 250;
+        let html = '<table style="width:' + (COL_SCEN + cmpVariants.length * COL_VAR) + 'px">' +
+            '<thead><tr><th>Сценарий</th>' +
+            cmpVariants.map(v => '<th>' + cmpEsc(v.model) + '<br>' +
+                '<small style="color:#6c757d;font-weight:normal;">' + cmpEsc(v.tag) + '</small></th>').join('') +
+            '</tr></thead><tbody>';
+
+        for (const s of CMP_SCENARIOS) {
+            html += '<tr><td>' + cmpEsc(s.name) +
+                cmpMoneyGrid([['вход', cmpGroup(s.inp)], ['выход', cmpGroup(s.out)],
+                              ['рассужд', cmpGroup(s.rea)], ['кэш-чт', cmpGroup(s.cr)]]) + '</td>' +
+                cmpVariants.map(v => {
+                    const warn = cmpWarn(v, s);
+                    return '<td' + (warn ? ' class="cmp-cell-warn"' : '') + '>' + cmpCell(v, s) + '</td>';
+                }).join('') + '</tr>';
+        }
+
+        // Строка «Свой сценарий» — единственная, где числа вводятся
+        const customRanks = cmpRanks(cmpCustom);
+        html += '<tr id="cmp-custom-row"><td>' + cmpEsc(cmpCustom.name) +
+            '<div class="cmp-grid">' +
+            cmpFieldInput('вход', cmpCustom.inp, 'inp', 'Вход без кэша') +
+            cmpFieldInput('выход', cmpCustom.out, 'out', 'Выход') +
+            cmpFieldInput('рассужд', cmpCustom.rea, 'rea', 'Токены рассуждений') +
+            cmpFieldInput('кэш-чт', cmpCustom.cr, 'cr', 'Кэш-чтение') +
+            '</div></td>' +
+            cmpVariants.map((v, i) => {
+                // Место красит строку цены, а Amber фон ячейки — про предупреждение.
+                // Это разные слои, поэтому классы складываются, а не исключают друг друга.
+                const cls = (customRanks[i] ? customRanks[i].trim() + ' ' : '') +
+                            (cmpWarn(v, cmpCustom) ? 'cmp-cell-warn' : '');
+                return '<td id="cmp-custom-cell-' + i + '"' +
+                    (cls.trim() ? ' class="' + cls.trim() + '"' : '') + '>' +
+                    cmpCell(v, cmpCustom) + '</td>';
+            }).join('') +
+            '</tr></tbody></table>';
+
+        table.innerHTML = html;
+    }
+
+    function cmpCustomInput(input, field) {
+        cmpCustom[field] = parseInt(input.value) || 0;
+        // Пересчитываем только свою строку: пресеты не трогаем, фокус в поле не теряем.
+        // Места пересчитываем здесь же — иначе подсветка осталась бы от прошлых цифр.
+        const ranks = cmpRanks(cmpCustom);
+        cmpVariants.forEach((v, i) => {
+            const cell = document.getElementById('cmp-custom-cell-' + i);
+            if (!cell) return;
+            const cls = (ranks[i] ? ranks[i].trim() + ' ' : '') +
+                        (cmpWarn(v, cmpCustom) ? 'cmp-cell-warn' : '');
+            cell.className = cls.trim();
+            cell.innerHTML = cmpCell(v, cmpCustom);
+        });
+    }
+    </script>
+</body>
+</html>
