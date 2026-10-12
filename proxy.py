@@ -10,7 +10,7 @@ import urllib.request
 import urllib.error
 import webbrowser
 import html as html_lib
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 # --- ГЛОБАЛЬНЫЕ НАСТРОЙКИ ---
@@ -806,7 +806,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         # Очищаем путь от лишних слэшей на конце
         clean_path = parsed.path.rstrip('/')
-        content_length = int(self.headers.get("Content-Length", 0))
+        content_length = self.headers.get("Content-Length", "0")
         write_log("Запрос", f"POST {self.path} от {self.client_address[0]} (Content-Length: {content_length})")
 
         if clean_path == "/select":
@@ -865,8 +865,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def handle_api_toggle_auto_open(self):
         try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length).decode("utf-8")
+            body = self._read_body().decode("utf-8", errors="replace")
             params = parse_qs(body)
             enabled = params.get("enabled", ["false"])[0].lower() == "true"
 
@@ -891,8 +890,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def handle_api_toggle_logging(self):
         try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length).decode("utf-8")
+            body = self._read_body().decode("utf-8", errors="replace")
             params = parse_qs(body)
             enabled = params.get("enabled", ["false"])[0].lower() == "true"
 
@@ -935,8 +933,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def handle_api_toggle_opencode_replace(self):
         """Вкл/выкл разрешение на изменение существующего конфига OpenCode."""
         try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            params = parse_qs(self.rfile.read(content_length).decode("utf-8"))
+            params = parse_qs(self._read_body().decode("utf-8", errors="replace"))
             enabled = params.get("enabled", ["false"])[0].lower() == "true"
 
             update_settings(lambda s: s.__setitem__("opencode_config_allow_replace", enabled))
@@ -950,8 +947,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def handle_api_save_opencode_path(self):
         """Сохраняет путь к существующему конфигу OpenCode."""
         try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            params = parse_qs(self.rfile.read(content_length).decode("utf-8"))
+            params = parse_qs(self._read_body().decode("utf-8", errors="replace"))
             path = (params.get("path", [""])[0] or "").strip()
 
             update_settings(lambda s: s.__setitem__("opencode_config_path", path))
@@ -1160,8 +1156,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 pass
 
     def handle_api_select(self):
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length).decode("utf-8")
+        body = self._read_body().decode("utf-8", errors="replace")
         params = parse_qs(body)
 
         settings = load_settings()
@@ -1318,8 +1313,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def handle_save_filters(self):
         try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length).decode("utf-8")
+            body = self._read_body().decode("utf-8", errors="replace")
             params = parse_qs(body)
 
             filters = {
@@ -1339,8 +1333,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def handle_api_save_filters(self):
         try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length).decode("utf-8")
+            body = self._read_body().decode("utf-8", errors="replace")
             params = parse_qs(body)
 
             filters = {
@@ -1389,6 +1382,21 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _read_body(self, max_bytes: int = 5 * 1024 * 1024) -> bytes:
+        """Читает тело запроса.
+
+        Content-Length приходит извне, поэтому на битом или огромном заголовке
+        возвращаем пустое тело вместо падения с 500 — вызывающий код сам
+        разберётся, что делать.
+        """
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            return b""
+        if content_length <= 0:
+            return b""
+        return self.rfile.read(min(content_length, max_bytes))
+
     def _reject_chat(self, status, message, err_type="invalid_request_error", code=None):
         """Отклоняет запрос к чату с логированием причины."""
         write_log("Прокси", f"Отклонено: {message}")
@@ -1436,8 +1444,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         final_model = f"{settings['selected_model']}@provider={settings['selected_provider']}&allow_fallbacks=false"
 
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length)
+        self._read_body()
 
         try:
             incoming_data = json.loads(body.decode("utf-8"))
@@ -1645,9 +1652,12 @@ if __name__ == "__main__":
     # Снимаем ранее запущенные экземпляры, чтобы освободить порт
     kill_existing_instances()
 
-    # Запускаем сервер в отдельном потоке
+    # Запускаем сервер в отдельном потоке.
+    # ThreadingHTTPServer, а не HTTPServer: иначе долгий запрос к RouterAI
+    # (генерация, стриминг) на всё своё время подвешивает веб-панель.
     try:
-        server = HTTPServer(("127.0.0.1", PORT), ProxyHandler)
+        server = ThreadingHTTPServer(("127.0.0.1", PORT), ProxyHandler)
+        server.daemon_threads = True
     except OSError as e:
         print(f"[Ошибка] Не удалось занять порт {PORT}: {e}")
         print(f"        Укажите другой порт в proxy_settings.json (поле \"port\") "
