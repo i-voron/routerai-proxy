@@ -113,6 +113,76 @@ class TestFormatExtraPrices(unittest.TestCase):
         self.assertEqual(proxy.format_extra_prices({"pricing": {"prompt": 1e-6}}, inline=True), "")
 
 
+class TestPriceSupport(unittest.TestCase):
+    """Отсутствующая цена — это «не поддерживается», а не ноль.
+
+    RouterAI не включает ключ в pricing, если операция не поддерживается.
+    Ноль тоже встречается (бесплатные модели), поэтому различать обязательно.
+    """
+
+    def test_absent_key_is_unsupported(self):
+        ep = {"pricing": {"prompt": 0.0, "completion": 1e-5}}
+        self.assertIsNone(proxy.price_value(ep, "input_cache_read"))
+        self.assertFalse(proxy.price_supported(ep, "input_cache_read"))
+
+    def test_present_zero_is_free_not_unsupported(self):
+        ep = {"pricing": {"prompt": 0.0}}
+        self.assertEqual(proxy.price_value(ep, "prompt"), 0.0)
+        self.assertTrue(proxy.price_supported(ep, "prompt"))
+
+    def test_missing_pricing_block_is_unsupported(self):
+        self.assertIsNone(proxy.price_value({}, "prompt"))
+        self.assertFalse(proxy.price_supported({"pricing": None}, "prompt"))
+
+    def test_unsupported_shows_dash_not_zero(self):
+        ep = {"pricing": {"prompt": 0.0, "completion": 1e-5}}
+        for key in ("input_cache_read", "input_cache_write", "internal_reasoning"):
+            self.assertEqual(proxy.format_price_cell(ep, key),
+                             '<span style="color:#adb5bd;" title="Операция не поддерживается">—</span>')
+
+    def test_free_price_shows_zero(self):
+        ep = {"pricing": {"prompt": 0.0}}
+        self.assertEqual(proxy.format_price_cell(ep, "prompt"), "0.00")
+
+    def test_real_price_is_formatted_per_million(self):
+        ep = {"pricing": {"prompt": 2.305e-5}, "pricing_units": {"prompt": "token"}}
+        self.assertEqual(proxy.format_price_cell(ep, "prompt"), "23.05")
+
+    def test_frozen_none_counts_as_zero_for_comparison(self):
+        # Появление поддержки кэша должно ловиться монитором как подорожание
+        self.assertEqual(proxy.frozen_price({"input_cache_read": None}, "input_cache_read"), 0)
+        self.assertEqual(proxy.frozen_price({}, "input_cache_read"), 0)
+        self.assertAlmostEqual(proxy.frozen_price({"input_cache_read": 1e-5}, "input_cache_read"), 1e-5)
+
+    def test_frozen_unsupported_shows_dash(self):
+        frozen = {"input_cache_read": None, "input_cache_write": 1e-5}
+        self.assertIn("—", proxy.format_frozen_price(frozen, "input_cache_read"))
+        self.assertIn("10.00 ₽", proxy.format_frozen_price(frozen, "input_cache_write"))
+
+    def test_legacy_zero_for_unsupported_shows_dash(self):
+        # Старые настройки хранят 0 вместо None — сверяемся с живым каталогом
+        frozen = {"prompt": 0.0, "completion": 0.0,
+                  "input_cache_read": 0, "input_cache_write": 0}
+        ep_no_cache = {"pricing": {"prompt": 0.0, "completion": 0.0}}
+        out = proxy.format_frozen_price(frozen, "input_cache_read", ep_no_cache)
+        self.assertIn("—", out)
+
+    def test_legacy_zero_with_support_stays_free(self):
+        # Кэш поддержан и бесплатен — это настоящие 0.00 ₽, не прочерк
+        frozen = {"input_cache_read": 0}
+        ep_free_cache = {"pricing": {"prompt": 0.0, "input_cache_read": 0}}
+        out = proxy.format_frozen_price(frozen, "input_cache_read", ep_free_cache)
+        self.assertIn("0.00 ₽", out)
+        self.assertNotIn("—", out)
+
+    def test_monitor_treats_new_support_as_increase(self):
+        frozen = {"prompt": 1e-5, "completion": 2e-5,
+                  "input_cache_read": None, "input_cache_write": None}
+        ep = {"pricing": {"prompt": 1e-5, "completion": 2e-5, "input_cache_read": 1e-6}}
+        curr = proxy.price_value(ep, "input_cache_read") or 0
+        self.assertGreater(curr, proxy.frozen_price(frozen, "input_cache_read"))
+
+
 class TestPatchOpencodeConfig(unittest.TestCase):
     """Хирургическая правка чужого конфига — самый опасный код в проекте."""
 

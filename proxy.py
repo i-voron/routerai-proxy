@@ -206,17 +206,18 @@ def price_monitor_loop() -> None:
                     current_ep = next((ep for ep in endpoints if ep.get("tag") == provider), None)
 
                     if current_ep:
-                        prices = current_ep.get("pricing") or {}
-                        curr_prompt = prices.get("prompt", 0)
-                        curr_comp = prices.get("completion", 0)
-                        curr_cache = prices.get("input_cache_read", 0)
-                        curr_cache_write = prices.get("input_cache_write", 0)
+                        # Неподдерживаемая операция даёт None, для сравнения
+                        # считается нулём: появление поддержки всегда рост
+                        curr_prompt = price_value(current_ep, "prompt") or 0
+                        curr_comp = price_value(current_ep, "completion") or 0
+                        curr_cache = price_value(current_ep, "input_cache_read") or 0
+                        curr_cache_write = price_value(current_ep, "input_cache_write") or 0
 
                         # Проверяем основные цены
-                        price_increased = (curr_prompt > frozen.get("prompt", 0) or
-                                curr_comp > frozen.get("completion", 0) or
-                                curr_cache > frozen.get("input_cache_read", 0) or
-                                curr_cache_write > frozen.get("input_cache_write", 0))
+                        price_increased = (curr_prompt > frozen_price(frozen, "prompt") or
+                                curr_comp > frozen_price(frozen, "completion") or
+                                curr_cache > frozen_price(frozen, "input_cache_read") or
+                                curr_cache_write > frozen_price(frozen, "input_cache_write"))
 
                         # Проверяем дополнительные цены из variable_pricings
                         variable_pricings = current_ep.get("variable_pricings") or []
@@ -233,14 +234,14 @@ def price_monitor_loop() -> None:
                         if price_increased:
                             # Формируем детали изменений
                             changes = []
-                            if curr_prompt > frozen.get("prompt", 0):
-                                changes.append(f"Вх: {frozen['prompt']*1e6:.2f}→{curr_prompt*1e6:.2f}₽")
-                            if curr_comp > frozen.get("completion", 0):
-                                changes.append(f"Вых: {frozen['completion']*1e6:.2f}→{curr_comp*1e6:.2f}₽")
-                            if curr_cache > frozen.get("input_cache_read", 0):
-                                changes.append(f"Кэш чтения: {frozen['input_cache_read']*1e6:.2f}→{curr_cache*1e6:.2f}₽")
-                            if curr_cache_write > frozen.get("input_cache_write", 0):
-                                changes.append(f"Кэш записи: {frozen.get('input_cache_write', 0)*1e6:.2f}→{curr_cache_write*1e6:.2f}₽")
+                            if curr_prompt > frozen_price(frozen, "prompt"):
+                                changes.append(f"Вх: {frozen_price(frozen, 'prompt')*1e6:.2f}→{curr_prompt*1e6:.2f}₽")
+                            if curr_comp > frozen_price(frozen, "completion"):
+                                changes.append(f"Вых: {frozen_price(frozen, 'completion')*1e6:.2f}→{curr_comp*1e6:.2f}₽")
+                            if curr_cache > frozen_price(frozen, "input_cache_read"):
+                                changes.append(f"Кэш чтения: {frozen_price(frozen, 'input_cache_read')*1e6:.2f}→{curr_cache*1e6:.2f}₽")
+                            if curr_cache_write > frozen_price(frozen, "input_cache_write"):
+                                changes.append(f"Кэш записи: {frozen_price(frozen, 'input_cache_write')*1e6:.2f}→{curr_cache_write*1e6:.2f}₽")
 
                             # Проверяем дополнительные цены
                             for vp in variable_pricings:
@@ -345,13 +346,60 @@ def format_tokens(value) -> str:
     return f"{v // 1000}K" if v >= 1000 else str(v)
 
 
-def format_price_cell(ep: dict, price_key: str) -> str:
-    """Форматирует цену с учётом типа единицы (token, request и т.д.)."""
+def price_value(ep: dict, price_key: str):
+    """Сырое значение цены (за токен или за вызов) или None.
+
+    RouterAI не включает ключ в pricing, если операция не поддерживается.
+    Это принципиально отличается от цены 0: бесплатные операции существуют
+    (prompt=0 у 41 провайдера, input_cache_write=0 у двух). Без этого различия
+    455 строк из 1504 показывали «0.00 ₽» там, где RouterAI пишет «не
+    поддерживается», а фильтр и калькулятор считали кэш бесплатным.
+    """
     pricing = ep.get("pricing") or {}
-    pricing_units = ep.get("pricing_units") or {}
-    value = pricing.get(price_key, 0)
-    unit = pricing_units.get(price_key, "token")
-    
+    if price_key not in pricing:
+        return None
+    return pricing[price_key] or 0
+
+
+def price_supported(ep: dict, price_key: str) -> bool:
+    """Поддерживает ли провайдер операцию."""
+    return price_key in (ep.get("pricing") or {})
+
+
+def frozen_price(frozen: dict, price_key: str) -> float:
+    """Зафиксированная цена или 0. None значит «тогда операция не
+    поддерживалась»; для сравнения с текущей ценой это то же самое, что ноль —
+    как только операция появится, любая цена окажется ростом."""
+    value = frozen.get(price_key)
+    return 0 if value is None else value
+
+
+def format_frozen_price(frozen: dict, price_key: str, ep: dict = None) -> str:
+    """Зафиксированная цена для показа. Неподдерживаемая операция —
+    прочерком, чтобы её не спутали с бесплатной.
+
+    ep — текущий эндпоинт провайдера. Нужен для настроек, сохранённых до
+    различения «нет операции» и «цена 0»: там вместо None лежит ноль. Если
+    операция не поддерживается и сейчас, показываем прочерк.
+    """
+    value = frozen.get(price_key)
+    if value is None or (value == 0 and ep is not None and not price_supported(ep, price_key)):
+        return '<span style="color:#adb5bd;" title="Операция не поддерживается">—</span>'
+    return (f'<span style="color:#28a745; font-weight:bold;">'
+            f'{frozen_price(frozen, price_key) * 1000000:.2f} ₽</span>')
+
+
+def format_price_cell(ep: dict, price_key: str) -> str:
+    """Форматирует цену с учётом типа единицы (token, request и т.д.).
+
+    Неподдерживаемая операция — прочерк, а не нуль: нуль это реальная
+    бесплатная цена, которую RouterAI тоже присылает.
+    """
+    value = price_value(ep, price_key)
+    if value is None:
+        return '<span style="color:#adb5bd;" title="Операция не поддерживается">—</span>'
+    unit = (ep.get("pricing_units") or {}).get(price_key, "token")
+
     if unit == "request":
         return f"{value:.2f} ₽/вызов"
     else:
@@ -510,7 +558,9 @@ def render_catalog_sections(catalog_data, settings) -> str:
                         data-input="{(ep.get("pricing") or {}).get("prompt", 0) * 1000000}"
                         data-output="{(ep.get("pricing") or {}).get("completion", 0) * 1000000}"
                         data-cache="{(ep.get("pricing") or {}).get("input_cache_read", 0) * 1000000}"
+                        data-cache-supported="{1 if price_supported(ep, "input_cache_read") else 0}"
                         data-reasoning="{(ep.get("pricing") or {}).get("internal_reasoning", 0) * 1000000}"
+                        data-reasoning-supported="{1 if price_supported(ep, "internal_reasoning") else 0}"
                         data-request="{(ep.get("pricing") or {}).get("request", 0)}"
                         data-max-tokens="{ep.get("max_completion_tokens") or 0}"
                         data-model="{esc(item["id"])}"
@@ -599,10 +649,10 @@ def render_html(settings: dict, catalog_data) -> str:
         if frozen:
             profile_html += f'''
             <p><strong>Цена фиксации (за 1М токенов):</strong>
-                Вх: <span style="color:#28a745; font-weight:bold;">{frozen.get("prompt", 0) * 1000000:.2f} ₽</span> |
-                Вых: <span style="color:#28a745; font-weight:bold;">{frozen.get("completion", 0) * 1000000:.2f} ₽</span> |
-                Кэш чтения: <span style="color:#28a745; font-weight:bold;">{frozen.get("input_cache_read", 0) * 1000000:.2f} ₽</span> |
-                Кэш записи: <span style="color:#28a745; font-weight:bold;">{frozen.get("input_cache_write", 0) * 1000000:.2f} ₽</span>
+                Вх: <span style="color:#28a745; font-weight:bold;">{frozen_price(frozen, "prompt") * 1000000:.2f} ₽</span> |
+                Вых: <span style="color:#28a745; font-weight:bold;">{frozen_price(frozen, "completion") * 1000000:.2f} ₽</span> |
+                Кэш чтения: {format_frozen_price(frozen, "input_cache_read", selected_ep)} |
+                Кэш записи: {format_frozen_price(frozen, "input_cache_write", selected_ep)}
             </p>'''
         profile_html += extra_html
         profile_html += links_html
@@ -1179,9 +1229,6 @@ class ProxyHandler(BaseHTTPRequestHandler):
         try:
             model_id = params.get("model_id", [""])[0]
             provider_tag = params.get("provider_tag", [""])[0]
-            prompt = float(params.get("prompt", ["0"])[0])
-            completion = float(params.get("completion", ["0"])[0])
-            cache = float(params.get("cache", ["0"])[0])
 
             # Валидация: проверяем, что провайдер существует в каталоге
             url = f"{ROUTERAI_BASE_URL}/models/{model_id}/endpoints"
@@ -1206,7 +1253,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # Находим выбранный endpoint для сохранения variable_pricings
             selected_ep = next((ep for ep in endpoints if ep.get("tag") == provider_tag), None)
             variable_pricings = (selected_ep or {}).get("variable_pricings") or []
-            cache_write = float((selected_ep or {}).get("pricing", {}).get("input_cache_write", 0))
+
+            # Фиксируем цены по живому эндпоинту, а не по числам из формы:
+            # у формы нет способа сказать «операция не поддерживается», и такая
+            # операция записалась бы как цена 0
+            prompt = price_value(selected_ep, "prompt") or 0
+            completion = price_value(selected_ep, "completion") or 0
 
             chosen = {
                 "filter_model_id": params.get("filter_model_id", [""])[0],
@@ -1219,8 +1271,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "frozen_prices": {
                     "prompt": prompt,
                     "completion": completion,
-                    "input_cache_read": cache,
-                    "input_cache_write": cache_write,
+                    "input_cache_read": price_value(selected_ep, "input_cache_read"),
+                    "input_cache_write": price_value(selected_ep, "input_cache_write"),
                     "variable_pricings": variable_pricings
                 },
                 # Выбор провайдера — это явное принятие текущих цен
@@ -1241,6 +1293,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
             output_len = selected_ep.get("max_completion_tokens") or 0
             provider_name = selected_ep.get("provider_name") or ""
             quantization = selected_ep.get("quantization") or ""
+            # None вместо 0.00: неподдерживаемая операция не то же самое,
+            # что бесплатная
+            cache_read = price_value(selected_ep, "input_cache_read")
+            cache_write = price_value(selected_ep, "input_cache_write")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
@@ -1258,8 +1314,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "extra_prices": format_extra_prices(selected_ep, inline=True),
                     "prompt": f"{prompt * 1000000:.2f}",
                     "completion": f"{completion * 1000000:.2f}",
-                    "cache": f"{cache * 1000000:.2f}",
-                    "cache_write": f"{float((selected_ep or {}).get('pricing', {}).get('input_cache_write', 0)) * 1000000:.2f}"
+                    "cache": None if cache_read is None else f"{cache_read * 1000000:.2f}",
+                    "cache_write": None if cache_write is None else f"{cache_write * 1000000:.2f}"
                 }
             }, ensure_ascii=False).encode("utf-8"))
         except (BrokenPipeError, ConnectionResetError):
@@ -1289,12 +1345,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     endpoints = data.get("data", {}).get("endpoints", [])
                     current_ep = next((ep for ep in endpoints if ep.get("tag") == settings["selected_provider"]), None)
                     if current_ep:
-                        prices = current_ep.get("pricing") or {}
                         settings["frozen_prices"] = {
-                            "prompt": prices.get("prompt", 0),
-                            "completion": prices.get("completion", 0),
-                            "input_cache_read": prices.get("input_cache_read", 0),
-                            "input_cache_write": prices.get("input_cache_write", 0),
+                            "prompt": price_value(current_ep, "prompt"),
+                            "completion": price_value(current_ep, "completion"),
+                            # Неподдерживаемая операция пишется как None,
+                            # а не как цена 0 — иначе монитор примет её за бесплатную
+                            "input_cache_read": price_value(current_ep, "input_cache_read"),
+                            "input_cache_write": price_value(current_ep, "input_cache_write"),
                             "variable_pricings": current_ep.get("variable_pricings") or []
                         }
                 except Exception as e:
@@ -1308,12 +1365,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     cached = load_catalog_cache()
                     selected_ep = get_selected_endpoint(s.get("selected_model"), s.get("selected_provider"), cached)
                     if selected_ep:
-                        prices = selected_ep.get("pricing") or {}
                         s["frozen_prices"] = {
-                            "prompt": prices.get("prompt", 0),
-                            "completion": prices.get("completion", 0),
-                            "input_cache_read": prices.get("input_cache_read", 0),
-                            "input_cache_write": prices.get("input_cache_write", 0),
+                            "prompt": price_value(selected_ep, "prompt"),
+                            "completion": price_value(selected_ep, "completion"),
+                            "input_cache_read": price_value(selected_ep, "input_cache_read"),
+                            "input_cache_write": price_value(selected_ep, "input_cache_write"),
                             "variable_pricings": selected_ep.get("variable_pricings") or []
                         }
                 except Exception as e:

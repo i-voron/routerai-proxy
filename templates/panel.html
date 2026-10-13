@@ -392,6 +392,15 @@
         }
     }
 
+    // Число из поля фильтра. Через parseFloat(...) || значение_по_умолчанию
+    // ноль превращался в значение по умолчанию: ввод «0» в ценовом фильтре
+    // означал «без лимита», хотя ноль это честный максимум — «только бесплатные».
+    // Проверяем именно на NaN, а пустое поле тоже даёт fallback.
+    function parseFilterNumber(id, fallback) {
+        const v = parseFloat(document.getElementById(id).value);
+        return isNaN(v) ? fallback : v;
+    }
+
     // Фильтр по набору текста: ждём паузы, чтобы не считать каталог
     // на каждый символ
     function applyFiltersDebounced() {
@@ -408,10 +417,12 @@
     function applyFilters() {
         saveFilters();
         const modelIdFilter = (document.getElementById('filter-model-id').value || '').trim().toLowerCase();
-        const reqContextK = parseFloat(document.getElementById('filter-context').value) || 0;
-        const maxInput = parseFloat(document.getElementById('filter-input-price').value) || Infinity;
-        const maxOutput = parseFloat(document.getElementById('filter-output-price').value) || Infinity;
-        const maxCache = parseFloat(document.getElementById('filter-cache-price').value) || Infinity;
+        const reqContextK = parseFilterNumber('filter-context', 0);
+        const maxInput = parseFilterNumber('filter-input-price', Infinity);
+        const maxOutput = parseFilterNumber('filter-output-price', Infinity);
+        const maxCache = parseFilterNumber('filter-cache-price', Infinity);
+        // Пустой фильтр по цене кэша не должен отсекать провайдеров без кэша
+        const cacheFilterOff = maxCache === Infinity;
 
         const modelSections = document.querySelectorAll('.model-section');
         modelSections.forEach(section => {
@@ -447,9 +458,13 @@
                 const rowInput = parseFloat(row.getAttribute('data-input')) || 0;
                 const rowOutput = parseFloat(row.getAttribute('data-output')) || 0;
                 const rowCache = parseFloat(row.getAttribute('data-cache')) || 0;
+                // Провайдер без поддержки кэша не имеет и цены за кэш: в фильтре
+                // он не должен проходить как «кэш бесплатный»
+                const cacheSupported = row.getAttribute('data-cache-supported') !== '0';
 
                 const matchesContext = (rowContextK >= reqContextK);
-                const matchesPrices = (rowInput <= maxInput) && (rowOutput <= maxOutput) && (rowCache <= maxCache);
+                const matchesPrices = (rowInput <= maxInput) && (rowOutput <= maxOutput) &&
+                    (cacheSupported || cacheFilterOff) && (rowCache <= maxCache);
                 const isMatched = matchesContext && matchesPrices;
 
                 const tagCell = row.querySelector('td:nth-child(2) code');
@@ -759,7 +774,11 @@
             input: cmpNum(row, 'data-input'),
             output: cmpNum(row, 'data-output'),
             cache: cmpNum(row, 'data-cache'),
+            // Отдельно от цены: 0 ₽ за кэш и «кэш не поддерживается» — разные
+            // вещи с разной стоимостью для пользователя
+            cacheSupported: row.getAttribute('data-cache-supported') !== '0',
             reasoning: cmpNum(row, 'data-reasoning'),
+            reasoningSupported: row.getAttribute('data-reasoning-supported') !== '0',
             request: cmpNum(row, 'data-request'),
             ctx: cmpNum(row, 'data-context-raw'),
             maxOut: cmpNum(row, 'data-max-tokens')
@@ -967,7 +986,9 @@
         const cIn = s.inp * v.input / 1e6;
         const cOut = s.out * v.output / 1e6;
         const cRea = s.rea * (v.reasoning > 0 ? v.reasoning : v.output) / 1e6;
-        const cCache = s.cr * (v.cache > 0 ? v.cache : v.input) / 1e6;
+        // Кэш без поддержки — не бесплатный кэш: придётся платить как за обычный
+        // вход. Поэтому 0 берём только когда операция поддержана.
+        const cCache = s.cr * (v.cache > 0 ? v.cache : (v.cacheSupported ? 0 : v.input)) / 1e6;
         const total = cIn + cOut + cRea + cCache;
         // Разбивка теми же подписанными столбиками, что и токены в сценариях
         const grid = cmpMoneyGrid([['вход', cmpRub(cIn)], ['выход', cmpRub(cOut)],
