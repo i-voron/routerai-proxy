@@ -815,11 +815,11 @@
             all.indeterminate = sel > 0 && sel < visible.length;
         }
 
-        // Все строки каталога запрашиваем один раз и раскладываем по моделям.
-        // Раньше запрос шёл на каждый чекбокс модели: 559 × 1504 ≈ 840 тысяч
-        // обращений к элементам за один проход фильтра.
+        // Раскладка по моделям берётся из уже посчитанного списка видимых строк:
+        // чекбокс «все» у модели описывает именно те провайдеры, которые
+        // видны после фильтров. Отфильтрованные строки в выборе не участвуют.
         const rowsByModel = new Map();
-        document.querySelectorAll('tr.provider-row').forEach(r => {
+        visible.forEach(r => {
             const model = r.getAttribute('data-model') || '';
             if (!rowsByModel.has(model)) rowsByModel.set(model, []);
             rowsByModel.get(model).push(r);
@@ -854,11 +854,14 @@
     }
 
     function toggleCompareModel(cb, model) {
-        const rows = [...document.querySelectorAll('tr.provider-row')]
+        // «Все» у модели — это её видимые провайдеры. Отфильтрованные строки
+        // не должны попадать в сравнение: иначе выбор зависит от того,
+        // что было в фильтре в этот момент.
+        const rows = cmpVisibleRows()
             .filter(r => r.getAttribute('data-model') === model);
         const keys = new Set(cmpVariants.map(v => v.key));
         if (rows.length > 0 && rows.every(r => keys.has(cmpKey(r)))) {
-            cmpUnselectRows(rows);          // вся модель выбрана — снимаем её
+            cmpUnselectRows(rows);          // вся видимая модель выбрана — снимаем её
         } else {
             rows.forEach(r => {
                 if (!keys.has(cmpKey(r))) cmpVariants.push(cmpReadRow(r));
