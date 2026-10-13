@@ -71,27 +71,27 @@
     <div class="filter-panel">
         <div class="filter-group">
             <label>Фильтр по ID модели</label>
-            <input type="text" id="filter-model-id" placeholder="например: gpt" value="<!-- FILTER_MODEL_ID -->" oninput="applyFilters()">
+            <input type="text" id="filter-model-id" placeholder="например: gpt" value="<!-- FILTER_MODEL_ID -->" oninput="applyFiltersDebounced()" onkeydown="if (event.key === 'Enter') applyFiltersNow()">
             <button type="button" class="filter-clear" onclick="clearFilter('filter-model-id')" title="Очистить">✕</button>
         </div>
         <div class="filter-group">
             <label>Минимум Контекста (тыс. ток.)</label>
-            <input type="number" id="filter-context" placeholder="Например: 262" value="<!-- FILTER_CONTEXT -->" oninput="applyFilters()">
+            <input type="number" min="0" id="filter-context" placeholder="Например: 262" value="<!-- FILTER_CONTEXT -->" oninput="stripFilterMinus(this); applyFiltersDebounced()" onkeydown="if (event.key === 'Enter') applyFiltersNow()">
             <button type="button" class="filter-clear" onclick="clearFilter('filter-context')" title="Очистить">✕</button>
         </div>
         <div class="filter-group">
             <label>Макс. цена Входа (за 1М ток.)</label>
-            <input type="number" id="filter-input-price" step="0.5" placeholder="Макс ₽ за вход" value="<!-- FILTER_INPUT_PRICE -->" oninput="applyFilters()">
+            <input type="number" min="0" id="filter-input-price" step="0.5" placeholder="Макс ₽ за вход" value="<!-- FILTER_INPUT_PRICE -->" oninput="stripFilterMinus(this); applyFiltersDebounced()" onkeydown="if (event.key === 'Enter') applyFiltersNow()">
             <button type="button" class="filter-clear" onclick="clearFilter('filter-input-price')" title="Очистить">✕</button>
         </div>
         <div class="filter-group">
             <label>Макс. цена Выхода (за 1М ток.)</label>
-            <input type="number" id="filter-output-price" step="0.5" placeholder="Макс ₽ за выход" value="<!-- FILTER_OUTPUT_PRICE -->" oninput="applyFilters()">
+            <input type="number" min="0" id="filter-output-price" step="0.5" placeholder="Макс ₽ за выход" value="<!-- FILTER_OUTPUT_PRICE -->" oninput="stripFilterMinus(this); applyFiltersDebounced()" onkeydown="if (event.key === 'Enter') applyFiltersNow()">
             <button type="button" class="filter-clear" onclick="clearFilter('filter-output-price')" title="Очистить">✕</button>
         </div>
         <div class="filter-group">
             <label>Макс. цена Кэша (за 1М ток.)</label>
-            <input type="number" id="filter-cache-price" step="0.5" placeholder="Макс ₽ за кэш" value="<!-- FILTER_CACHE_PRICE -->" oninput="applyFilters()">
+            <input type="number" min="0" id="filter-cache-price" step="0.5" placeholder="Макс ₽ за кэш" value="<!-- FILTER_CACHE_PRICE -->" oninput="stripFilterMinus(this); applyFiltersDebounced()" onkeydown="if (event.key === 'Enter') applyFiltersNow()">
             <button type="button" class="filter-clear" onclick="clearFilter('filter-cache-price')" title="Очистить">✕</button>
         </div>
     </div>
@@ -211,6 +211,17 @@
     </div>
 
     <script>
+    // Задержка перед применением фильтров. Без неё каждый символ пересчитывает
+    // более полуторы тысячи строк каталога и перезаписывает файл настроек,
+    // из-за чего интерфейс подвисает на время набора. Ввод текста ждёт паузы,
+    // а действия (крестик, обновление каталога) применяют фильтр сразу.
+    const FILTER_DEBOUNCE_MS = 350;
+    let filterTimer = null;
+
+    // Общий пустой список строк: чтобы не выделять новый массив на каждую
+    // строку, которой нет в раскладке. Используется только на чтение.
+    const NO_ROWS = [];
+
     function saveFilters() {
         const filters = {
             modelId: document.getElementById('filter-model-id').value,
@@ -371,6 +382,29 @@
         el.focus();
     }
 
+    // Отрицательные значения в числовых фильтрах бессмысленны: цена и контекст
+    // не бывают меньше нуля. Убираем минус сразу при вводе, иначе значение уходит
+    // в расчёт и фильтр перестаёт находить модели. Здесь, а не в applyFilters,
+    // чтобы поле не показывало заведомо неверное число.
+    function stripFilterMinus(el) {
+        if (el.value.charAt(0) === '-') {
+            el.value = el.value.replace(/^-+/, '');
+        }
+    }
+
+    // Фильтр по набору текста: ждём паузы, чтобы не считать каталог
+    // на каждый символ
+    function applyFiltersDebounced() {
+        clearTimeout(filterTimer);
+        filterTimer = setTimeout(applyFilters, FILTER_DEBOUNCE_MS);
+    }
+
+    // Применить сразу, не дожидаясь задержки — нажатие Enter в поле фильтра
+    function applyFiltersNow() {
+        clearTimeout(filterTimer);
+        applyFilters();
+    }
+
     function applyFilters() {
         saveFilters();
         const modelIdFilter = (document.getElementById('filter-model-id').value || '').trim().toLowerCase();
@@ -393,6 +427,17 @@
             let visibleRowsInModel = 0;
             let hiddenRowsInModel = 0;
 
+            // Строки с переменной ценой ищем один раз на секцию и раскладываем
+            // по тегу провайдера. Раньше такой запрос шёл на каждую строку
+            // каталога — более полуторы тысячи селекторных запросов за проход.
+            // Побочная выгода: тег из API больше не попадает в селектор.
+            const assocByTag = new Map();
+            section.querySelectorAll('.variable-pricing-row').forEach(r => {
+                const tag = r.getAttribute('data-provider-assoc') || '';
+                if (!assocByTag.has(tag)) assocByTag.set(tag, []);
+                assocByTag.get(tag).push(r);
+            });
+
             const toggleBtn = section.querySelector('.toggle-hidden-btn');
             const isCurrentlyExpanded = toggleBtn ? toggleBtn.classList.contains('expanded') : false;
 
@@ -409,7 +454,7 @@
 
                 const tagCell = row.querySelector('td:nth-child(2) code');
                 const providerTag = tagCell ? tagCell.textContent : '';
-                const assocRows = section.querySelectorAll('.variable-pricing-row[data-provider-assoc="' + providerTag + '"]');
+                const assocRows = assocByTag.get(providerTag) || NO_ROWS;
 
                 if (isMatched) {
                     row.classList.remove('filtered-out');
@@ -751,10 +796,19 @@
             all.indeterminate = sel > 0 && sel < visible.length;
         }
 
+        // Все строки каталога запрашиваем один раз и раскладываем по моделям.
+        // Раньше запрос шёл на каждый чекбокс модели: 559 × 1504 ≈ 840 тысяч
+        // обращений к элементам за один проход фильтра.
+        const rowsByModel = new Map();
+        document.querySelectorAll('tr.provider-row').forEach(r => {
+            const model = r.getAttribute('data-model') || '';
+            if (!rowsByModel.has(model)) rowsByModel.set(model, []);
+            rowsByModel.get(model).push(r);
+        });
+
         document.querySelectorAll('.cmp-check-model').forEach(box => {
             const model = box.getAttribute('data-model');
-            const rows = [...document.querySelectorAll('tr.provider-row')]
-                .filter(r => r.getAttribute('data-model') === model);
+            const rows = rowsByModel.get(model) || NO_ROWS;
             const sel = rows.filter(r => keys.has(cmpKey(r))).length;
             box.checked = rows.length > 0 && sel === rows.length;
             box.indeterminate = sel > 0 && sel < rows.length;
