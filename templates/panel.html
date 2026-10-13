@@ -656,6 +656,20 @@
         .catch(() => {});
     }
 
+    // Домен RouterAI. Подставляется из proxy.py: он единственный источник
+    // адреса, путь к API и ссылки на сайт собираются прямо в местах вызова
+    const ROUTERAI_DOMAIN = '<!-- ROUTERAI_DOMAIN -->';
+
+    // Цена фиксации для показа. null приходит от сервера, когда операция не
+    // поддерживается: показываем прочерк, а не 0.00 ₽ — иначе неподдерживаемая
+    // операция снова выглядела бы бесплатной
+    function frozenPriceHtml(value) {
+        if (value === null || value === undefined) {
+            return '<span style="color:#adb5bd;" title="Операция не поддерживается">—</span>';
+        }
+        return '<span style="color:#28a745;font-weight:bold;">' + value + ' ₽</span>';
+    }
+
     function updateProfileBlock(profile) {
         const block = document.getElementById('profile-info');
         if (!block || !profile) return;
@@ -684,12 +698,12 @@
             '<p><strong>Цена фиксации (за 1М токенов):</strong> ' +
             'Вх: <span style="color:#28a745;font-weight:bold;">' + profile.prompt + ' ₽</span> | ' +
             'Вых: <span style="color:#28a745;font-weight:bold;">' + profile.completion + ' ₽</span> | ' +
-            'Кэш чтения: <span style="color:#28a745;font-weight:bold;">' + profile.cache + ' ₽</span> | ' +
-            'Кэш записи: <span style="color:#28a745;font-weight:bold;">' + (profile.cache_write || '0.00') + ' ₽</span></p>' +
+            'Кэш чтения: ' + frozenPriceHtml(profile.cache) + ' | ' +
+            'Кэш записи: ' + frozenPriceHtml(profile.cache_write) + '</p>' +
             extraHtml +
             '<p style="margin-top: 8px;">' +
-                '<a href="https://routerai.ru/models/' + profile.model + '" target="_blank" style="font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>' +
-                '<a href="https://routerai.ru/api/v1/models/' + profile.model + '/endpoints" target="_blank" style="font-size: 13px; color: #28a745; text-decoration: none; margin-left: 10px;">[Endpoints ↗]</a>' +
+                '<a href="' + ROUTERAI_DOMAIN + '/models/' + profile.model + '" target="_blank" style="font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>' +
+                '<a href="' + ROUTERAI_DOMAIN + '/api/v1/models/' + profile.model + '/endpoints" target="_blank" style="font-size: 13px; color: #28a745; text-decoration: none; margin-left: 10px;">[Endpoints ↗]</a>' +
             '</p>';
     }
 

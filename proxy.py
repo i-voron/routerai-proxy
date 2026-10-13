@@ -9,6 +9,7 @@ import threading
 import urllib.request
 import urllib.error
 import webbrowser
+import concurrent.futures
 import html as html_lib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -17,13 +18,17 @@ from urllib.parse import urlparse, parse_qs
 SETTINGS_FILE = "proxy_settings.json"
 LOG_FILE = "proxy.log"
 CACHE_FILE = "catalog_cache.json"
-ROUTERAI_BASE_URL = "https://routerai.ru/api/v1"
+# Только домен: путь к API и ссылки на сайт собираются в местах вызова,
+# иначе адрес сервиса расползается по шести местам вперемешку с путями
+ROUTERAI_DOMAIN = "https://routerai.ru"
 
 # --- Таймауты обращений к RouterAI, секунды ---
-TIMEOUT_MODELS = 10        # список моделей
-TIMEOUT_ENDPOINTS = 10     # эндпоинты модели
+TIMEOUT_ENDPOINTS = 10     # эндпоинты модели и запрос списка моделей
 TIMEOUT_ENDPOINTS_LONG = 20  # эндпоинты в фоновом мониторе
 TIMEOUT_CHAT = 60          # генерация и стриминг
+
+# Сколько запросов эндпоинтов ведём параллельно при загрузке каталога
+CATALOG_FETCH_WORKERS = 5
 
 # --- Значения по умолчанию, если провайдер их не сообщил ---
 DEFAULT_CONTEXT = 1048576
@@ -197,7 +202,7 @@ def price_monitor_loop() -> None:
                 _monitor_prev_blocked = False
 
                 if model and provider and frozen:
-                    url = f"{ROUTERAI_BASE_URL}/models/{model}/endpoints"
+                    url = f"{ROUTERAI_DOMAIN}/api/v1/models/{model}/endpoints"
                     req = urllib.request.Request(url, headers={"User-Agent": "RouterAI-Proxy/1.0"})
                     with urllib.request.urlopen(req, timeout=TIMEOUT_ENDPOINTS) as resp:
                         data = json.loads(resp.read().decode("utf-8"))
@@ -518,8 +523,8 @@ def render_catalog_sections(catalog_data, settings) -> str:
         <div class="model-section">
             <h3 class="model-title">{esc(item["name"])} <span class="model-id">ID: <code>{esc(item["id"])}</code></span>
             <span style="margin-left: 15px; font-size: 13px; color: #666;">{date_str}</span>
-            <a href="https://routerai.ru/models/{esc(item["id"])}" target="_blank" style="margin-left: 15px; font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
-            <a href="https://routerai.ru/api/v1/models/{esc(item["id"])}/endpoints" target="_blank" style="margin-left: 10px; font-size: 13px; color: #28a745; text-decoration: none;">[Endpoints ↗]</a></h3>
+            <a href="{ROUTERAI_DOMAIN}/models/{esc(item["id"])}" target="_blank" style="margin-left: 15px; font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
+            <a href="{ROUTERAI_DOMAIN}/api/v1/models/{esc(item["id"])}/endpoints" target="_blank" style="margin-left: 10px; font-size: 13px; color: #28a745; text-decoration: none;">[Endpoints ↗]</a></h3>
             {f'<details style="margin-bottom: 10px;"><summary style="cursor: pointer; color: #666; font-size: 13px;">Описание</summary><p style="margin: 5px 0 0 0; font-size: 13px; color: #555;">{esc(description)}</p></details>' if description else ''}
             <table>
                 <thead>
@@ -617,6 +622,10 @@ def render_html(settings: dict, catalog_data) -> str:
     cache_date = get_cache_info()
     html = html.replace("<!-- CACHE_DATE -->", cache_date)
 
+    # Домен RouterAI для ссылок из клиентского скрипта. Единственное место,
+    # где адрес попадает в шаблон: сам шаблон о нём ничего не знает.
+    html = html.replace("<!-- ROUTERAI_DOMAIN -->", ROUTERAI_DOMAIN)
+
     # Профиль
     if settings.get("selected_model") and settings.get("selected_provider"):
         frozen = settings.get("frozen_prices", {})
@@ -641,8 +650,8 @@ def render_html(settings: dict, catalog_data) -> str:
                         if tokens_display else '')
         links_html = f'''
             <p style="margin-top: 8px;">
-                <a href="https://routerai.ru/models/{esc(settings["selected_model"])}" target="_blank" style="font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
-                <a href="https://routerai.ru/api/v1/models/{esc(settings["selected_model"])}/endpoints" target="_blank" style="font-size: 13px; color: #28a745; text-decoration: none; margin-left: 10px;">[Endpoints ↗]</a>
+                <a href="{ROUTERAI_DOMAIN}/models/{esc(settings["selected_model"])}" target="_blank" style="font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
+                <a href="{ROUTERAI_DOMAIN}/api/v1/models/{esc(settings["selected_model"])}/endpoints" target="_blank" style="font-size: 13px; color: #28a745; text-decoration: none; margin-left: 10px;">[Endpoints ↗]</a>
             </p>'''
         profile_html = f'''
             <p style="margin-bottom: 10px;">
@@ -739,7 +748,7 @@ def fetch_catalog() -> list:
     catalog_data = []
     try:
         write_log("Каталог", "Запрос /models...")
-        url = f"{ROUTERAI_BASE_URL}/models"
+        url = f"{ROUTERAI_DOMAIN}/api/v1/models"
         req = urllib.request.Request(url, headers={"User-Agent": "RouterAI-Proxy/1.0"})
         with urllib.request.urlopen(req, timeout=TIMEOUT_ENDPOINTS) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -749,7 +758,7 @@ def fetch_catalog() -> list:
         def fetch_endpoints(m):
             model_id = m["id"]
             try:
-                url = f"{ROUTERAI_BASE_URL}/models/{model_id}/endpoints"
+                url = f"{ROUTERAI_DOMAIN}/api/v1/models/{model_id}/endpoints"
                 req = urllib.request.Request(url, headers={"User-Agent": "RouterAI-Proxy/1.0"})
                 with urllib.request.urlopen(req, timeout=TIMEOUT_ENDPOINTS_LONG) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
@@ -767,7 +776,6 @@ def fetch_catalog() -> list:
                 return None
         
         # Параллельная загрузка endpoints с сохранением порядка
-        import concurrent.futures
         results_map = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             future_to_model = {executor.submit(fetch_endpoints, m): m for m in all_models}
@@ -1237,7 +1245,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             provider_tag = params.get("provider_tag", [""])[0]
 
             # Валидация: проверяем, что провайдер существует в каталоге
-            url = f"{ROUTERAI_BASE_URL}/models/{model_id}/endpoints"
+            url = f"{ROUTERAI_DOMAIN}/api/v1/models/{model_id}/endpoints"
             req = urllib.request.Request(url, headers={"User-Agent": "RouterAI-Proxy/1.0"})
             with urllib.request.urlopen(req, timeout=TIMEOUT_ENDPOINTS) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -1344,7 +1352,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             settings = load_settings()
             if settings["selected_model"] and settings["selected_provider"]:
                 try:
-                    url = f"{ROUTERAI_BASE_URL}/models/{settings['selected_model']}/endpoints"
+                    url = f"{ROUTERAI_DOMAIN}/api/v1/models/{settings['selected_model']}/endpoints"
                     req = urllib.request.Request(url, headers={"User-Agent": "RouterAI-Proxy/1.0"})
                     with urllib.request.urlopen(req, timeout=TIMEOUT_ENDPOINTS) as resp:
                         data = json.loads(resp.read().decode("utf-8"))
@@ -1542,7 +1550,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         try:
             req = urllib.request.Request(
-                f"{ROUTERAI_BASE_URL}/chat/completions",
+                f"{ROUTERAI_DOMAIN}/api/v1/chat/completions",
                 data=json.dumps(incoming_data).encode("utf-8"),
                 headers={
                     "Authorization": f"Bearer {api_key}",
