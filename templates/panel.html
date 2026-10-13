@@ -938,13 +938,34 @@
         '<div class="cmp-grid">' +
         pairs.map(([l, v]) => cmpFieldText(l, v)).join('') + '</div>';
 
+    // Разбивка стоимости сценария по позициям. null — провайдер с оплатой за
+    // запрос, такие ячейки в рейтинг не входят.
+    // Одна функция и на показ, и на ранжирование: раздельные копии формул уже
+    // расходились — цена в калькуляторе исправилась, а подсветка мест считала
+    // по-старому.
+    function cmpBreakdown(v, s) {
+        if (v.request > 0) return null;
+        const input = s.inp * v.input / 1e6;
+        const output = s.out * v.output / 1e6;
+        // Отдельная цена рассуждений — считаем по ней. Бесплатные рассуждения
+        // (цена 0 при поддержке) это ноль, а не цена выхода. Отсутствие цены
+        // значит, что провайдер не выделяет рассуждения и берёт за них как за
+        // обычный выход.
+        const reasoning = s.rea * (v.reasoning > 0 ? v.reasoning :
+                                   (v.reasoningSupported ? 0 : v.output)) / 1e6;
+        // Кэш без поддержки — не бесплатный кэш: придётся платить как за обычный
+        // вход. Поэтому 0 берём только когда операция поддержана.
+        const cache = s.cr * (v.cache > 0 ? v.cache :
+                              (v.cacheSupported ? 0 : v.input)) / 1e6;
+        return { input: input, output: output, reasoning: reasoning, cache: cache,
+                 total: input + output + reasoning + cache };
+    }
+
     // Сумма для пары (вариант, сценарий). null — провайдер с оплатой за запрос,
     // такие ячейки в рейтинг не входят.
     function cmpTotalValue(v, s) {
-        if (v.request > 0) return null;
-        const pCache = v.cache > 0 ? v.cache : v.input;
-        const pRea = v.reasoning > 0 ? v.reasoning : v.output;
-        return (s.inp * v.input + s.out * v.output + s.rea * pRea + s.cr * pCache) / 1e6;
+        const b = cmpBreakdown(v, s);
+        return b === null ? null : b.total;
     }
 
     // Места вариантов в строке сценария: 1-е дешевле, 2-е следующее.
@@ -985,18 +1006,12 @@
     }
 
     function cmpCell(v, s) {
-        if (v.request > 0) return '<span class="cmp-na">не сравнимо</span>';
-        const cIn = s.inp * v.input / 1e6;
-        const cOut = s.out * v.output / 1e6;
-        const cRea = s.rea * (v.reasoning > 0 ? v.reasoning : v.output) / 1e6;
-        // Кэш без поддержки — не бесплатный кэш: придётся платить как за обычный
-        // вход. Поэтому 0 берём только когда операция поддержана.
-        const cCache = s.cr * (v.cache > 0 ? v.cache : (v.cacheSupported ? 0 : v.input)) / 1e6;
-        const total = cIn + cOut + cRea + cCache;
+        const b = cmpBreakdown(v, s);
+        if (b === null) return '<span class="cmp-na">не сравнимо</span>';
         // Разбивка теми же подписанными столбиками, что и токены в сценариях
-        const grid = cmpMoneyGrid([['вход', cmpRub(cIn)], ['выход', cmpRub(cOut)],
-                                  ['рассужд', cmpRub(cRea)], ['кэш', cmpRub(cCache)]]);
-        return '<b>' + cmpRub(total) + ' ₽</b>' +
+        const grid = cmpMoneyGrid([['вход', cmpRub(b.input)], ['выход', cmpRub(b.output)],
+                                  ['рассужд', cmpRub(b.reasoning)], ['кэш', cmpRub(b.cache)]]);
+        return '<b>' + cmpRub(b.total) + ' ₽</b>' +
             grid + cmpWarn(v, s);
     }
 
