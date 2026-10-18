@@ -351,6 +351,47 @@ def format_tokens(value) -> str:
     return f"{v // 1000}K" if v >= 1000 else str(v)
 
 
+MODALITY_LABELS = {
+    "text": "Текст",
+    "image": "Изображения",
+    "video": "Видео",
+    "file": "Файлы",
+    "audio": "Аудио",
+}
+
+
+def format_modalities(item: dict) -> str:
+    """Блок «Модальности» в шапке секции модели: что принимает на вход и что отдаёт.
+
+    Данные — model["architecture"] (input_modalities/output_modalities),
+    это уровень модели, поэтому блок один на секцию, а не колонка таблицы.
+    Нет данных (старый кэш до обновления каталога) — пустая строка, без
+    пустого блока. Неизвестные модальности показываем как есть.
+    """
+    arch = item.get("architecture") or {}
+    if not isinstance(arch, dict):
+        return ""
+
+    def badges(values, cls):
+        out = []
+        for v in values or []:
+            if not isinstance(v, str) or not v:
+                continue
+            out.append(f'<span class="{cls}">{esc(MODALITY_LABELS.get(v, v))}</span>')
+        return "".join(out)
+
+    in_badges = badges(arch.get("input_modalities"), "mod-badge-in")
+    out_badges = badges(arch.get("output_modalities"), "mod-badge-out")
+    if not in_badges and not out_badges:
+        return ""
+    rows = ""
+    if in_badges:
+        rows += f'<div class="mod-row"><span class="mod-dir">↓ Вход</span>{in_badges}</div>'
+    if out_badges:
+        rows += f'<div class="mod-row"><span class="mod-dir">↑ Выход</span>{out_badges}</div>'
+    return f'<div class="mod-block"><span class="mod-title">Модальности</span>{rows}</div>'
+
+
 def price_value(ep: dict, price_key: str):
     """Сырое значение цены (за токен или за вызов) или None.
 
@@ -519,6 +560,7 @@ def render_catalog_sections(catalog_data, settings) -> str:
         else:
             date_str = ""
         description = item.get("description", "")
+        modalities = format_modalities(item)
         catalog_html += f'''
         <div class="model-section">
             <h3 class="model-title">{esc(item["name"])} <span class="model-id">ID: <code>{esc(item["id"])}</code></span>
@@ -526,6 +568,7 @@ def render_catalog_sections(catalog_data, settings) -> str:
             <a href="{ROUTERAI_DOMAIN}/models/{esc(item["id"])}" target="_blank" style="margin-left: 15px; font-size: 13px; color: #007bff; text-decoration: none;">[Страница модели ↗]</a>
             <a href="{ROUTERAI_DOMAIN}/api/v1/models/{esc(item["id"])}/endpoints" target="_blank" style="margin-left: 10px; font-size: 13px; color: #28a745; text-decoration: none;">[Endpoints ↗]</a></h3>
             {f'<details style="margin-bottom: 10px;"><summary style="cursor: pointer; color: #666; font-size: 13px;">Описание</summary><p style="margin: 5px 0 0 0; font-size: 13px; color: #555;">{esc(description)}</p></details>' if description else ''}
+            {modalities}
             <table>
                 <thead>
                     <tr>
@@ -769,7 +812,10 @@ def fetch_catalog() -> list:
                         "name": m.get("name", model_id),
                         "endpoints": endpoints,
                         "created": m.get("created"),
-                        "description": m.get("description", "")
+                        "description": m.get("description", ""),
+                        # Модальности (вход/выход) — уровень модели, нужны для
+                        # блока «Модальности» в шапке секции каталога
+                        "architecture": m.get("architecture"),
                     }
             except Exception as e:
                 write_log("Каталог", f"Ошибка загрузки endpoints для {model_id}: {type(e).__name__}: {e}")

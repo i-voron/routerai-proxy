@@ -83,6 +83,38 @@ class TestFormatTokens(unittest.TestCase):
         self.assertEqual(proxy.format_tokens("abc"), "—")
 
 
+class TestFormatModalities(unittest.TestCase):
+    """Блок «Модальности» в шапке секции модели."""
+
+    ARCH = {"input_modalities": ["text", "image", "video", "file"],
+            "output_modalities": ["text"]}
+
+    def test_badges_have_russian_labels(self):
+        out = proxy.format_modalities({"architecture": self.ARCH})
+        for label in ("Текст", "Изображения", "Видео", "Файлы"):
+            self.assertIn(label, out)
+        self.assertIn("Модальности", out)
+        self.assertIn("↓ Вход", out)
+        self.assertIn("↑ Выход", out)
+
+    def test_unknown_modality_shown_as_is(self):
+        out = proxy.format_modalities(
+            {"architecture": {"input_modalities": ["hologram"], "output_modalities": []}})
+        self.assertIn("hologram", out)
+        self.assertNotIn("↑ Выход", out)
+
+    def test_missing_or_empty_gives_empty_string(self):
+        for item in ({}, {"architecture": None}, {"architecture": "text"},
+                     {"architecture": {}}, {"architecture": {"input_modalities": []}}):
+            self.assertEqual(proxy.format_modalities(item), "", item)
+
+    def test_values_are_escaped(self):
+        out = proxy.format_modalities(
+            {"architecture": {"input_modalities": ["<b>x</b>"], "output_modalities": []}})
+        self.assertNotIn("<b>x</b>", out)
+        self.assertIn("&lt;b&gt;", out)
+
+
 class TestFormatExtraPrices(unittest.TestCase):
     """Дополнительные тарифы: русские названия и единицы."""
 
