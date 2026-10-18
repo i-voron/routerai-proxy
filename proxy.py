@@ -15,9 +15,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 # --- ГЛОБАЛЬНЫЕ НАСТРОЙКИ ---
-SETTINGS_FILE = "proxy_settings.json"
-LOG_FILE = "proxy.log"
-CACHE_FILE = "catalog_cache.json"
+# Каталог скрипта, а не текущая рабочая директория: файлы настроек, лога и кэша
+# должны находиться рядом с proxy.py, иначе при запуске из другого каталога
+# (например, python3 ~/bin/routerai-proxy/proxy.py) они не находятся.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_FILE = os.path.join(SCRIPT_DIR, "proxy_settings.json")
+LOG_FILE = os.path.join(SCRIPT_DIR, "proxy.log")
+CACHE_FILE = os.path.join(SCRIPT_DIR, "catalog_cache.json")
 # Только домен: путь к API и ссылки на сайт собираются в местах вызова,
 # иначе адрес сервиса расползается по шести местам вперемешку с путями
 ROUTERAI_DOMAIN = "https://routerai.ru"

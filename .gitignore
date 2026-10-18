@@ -6,6 +6,7 @@ proxy_settings.json
 
 # Кэш каталога моделей (пересобирается кнопкой «Обновить каталог»)
 catalog_cache.json
+routerai-proxy-script.json 
 
 # Лог работы прокси
 proxy.log
@@ -21,3 +22,5 @@ __pycache__/
 # Временные файлы атомарной записи (обычно удаляются сразу)
 *.tmp
 *.py[cod]
+
+.mcpignore 
