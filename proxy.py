@@ -688,6 +688,8 @@ def render_html(settings: dict, catalog_data) -> str:
         )
         extra_prices = format_extra_prices(selected_ep, inline=True)
         extra_html = f'<p><strong>Дополнительно:</strong><br>{extra_prices}</p>' if extra_prices else ''
+        model_item = next((m for m in catalog_data if m.get("id") == settings["selected_model"]), {})
+        modalities_html = format_modalities(model_item)
         context_html = (f'<p><strong>Контекст / Выход:</strong> '
                         f'<strong>{tokens_display}</strong> токенов</p>'
                         if tokens_display else '')
@@ -703,7 +705,8 @@ def render_html(settings: dict, catalog_data) -> str:
             </p>
             <p><strong>Провайдер (Хост):</strong> {prov_display}</p>
             <p><strong>Тег провайдера:</strong> {tag_display}</p>
-            {context_html}'''
+            {context_html}
+            {modalities_html}'''
         if frozen:
             profile_html += f'''
             <p><strong>Цена фиксации (за 1М токенов):</strong>
@@ -1349,6 +1352,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             cached = load_catalog_cache()
             model_name = get_model_display_name(model_id, cached)
             selected_ep = get_selected_endpoint(model_id, provider_tag, cached)
+            model_item = next((m for m in cached if m.get("id") == model_id), {})
             context_len = selected_ep.get("context_length") or 0
             output_len = selected_ep.get("max_completion_tokens") or 0
             provider_name = selected_ep.get("provider_name") or ""
@@ -1372,6 +1376,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "context": format_tokens(context_len),
                     "output": format_tokens(output_len),
                     "extra_prices": format_extra_prices(selected_ep, inline=True),
+                    "modalities": format_modalities(model_item),
                     "prompt": f"{prompt * 1000000:.2f}",
                     "completion": f"{completion * 1000000:.2f}",
                     "cache": None if cache_read is None else f"{cache_read * 1000000:.2f}",

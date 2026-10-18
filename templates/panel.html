@@ -707,6 +707,7 @@
             '<p><strong>Провайдер (Хост):</strong> ' + provName + '</p>' +
             '<p><strong>Тег провайдера:</strong> ' + tagDisplay + '</p>' +
             tokensHtml +
+            (profile.modalities ? profile.modalities : '') +
             '<p><strong>Цена фиксации (за 1М токенов):</strong> ' +
             'Вх: <span style="color:#28a745;font-weight:bold;">' + profile.prompt + ' ₽</span> | ' +
             'Вых: <span style="color:#28a745;font-weight:bold;">' + profile.completion + ' ₽</span> | ' +
