@@ -179,6 +179,35 @@ def get_base_url() -> str:
     return f"http://127.0.0.1:{get_port()}"
 
 
+# --- АВТО-ОТКРЫТИЕ ПАНЕЛИ ПРИ БЛОКИРОВКЕ ---
+# Клиент шлёт пачку запросов почти одновременно, и без защёлки каждый из них
+# открывал новое окно браузера. Открываем не больше одного раза за эпизод
+# блокировки; защёлка сбрасывается, когда блокировку снимают.
+_auto_open_lock = threading.Lock()
+_auto_open_done = False
+
+
+def claim_auto_open() -> bool:
+    """Захватывает право открыть панель. True — только для первого запроса.
+
+    Проверка и установка флага выполняются под одним замком, поэтому при
+    одновременных запросах окно откроет ровно один из них.
+    """
+    global _auto_open_done
+    with _auto_open_lock:
+        if _auto_open_done:
+            return False
+        _auto_open_done = True
+        return True
+
+
+def reset_auto_open_latch() -> None:
+    """Разрешает снова открыть панель при следующей блокировке."""
+    global _auto_open_done
+    with _auto_open_lock:
+        _auto_open_done = False
+
+
 # --- ФОНОВЫЙ МОНИТОРИНГ ЦЕН ---
 # Предыдущее состояние блокировки — чтобы логировать переход один раз
 _monitor_prev_blocked = None
@@ -1364,6 +1393,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 s.update(chosen)
 
             update_settings(apply_choice)
+            # Блокировка снята — при следующем подорожании окно откроется снова
+            reset_auto_open_latch()
 
             # Возвращаем обновленные данные профиля
             cached = load_catalog_cache()
@@ -1458,6 +1489,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     write_log("Прокси", f"Не удалось перечитать цены при снятии блокировки: {e}")
 
             update_settings(lift_block)
+            # Блокировка снята — при следующем подорожании окно откроется снова
+            reset_auto_open_latch()
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
@@ -1560,8 +1593,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
         """Проверяет, можно ли обрабатывать запрос. Возвращает ключ или None."""
         if settings.get("is_blocked"):
             write_log("Прокси", f"Запрос заблокирован: {settings['block_reason']}")
-            # Авто-открытие панели управления в браузере (если включено)
-            if settings.get("auto_open_on_block"):
+            # Авто-открытие панели управления в браузере (если включено).
+            # claim_auto_open под замком отсекает все запросы пачки, кроме
+            # первого, иначе на каждый запрос открывалось новое окно.
+            if settings.get("auto_open_on_block") and claim_auto_open():
                 def _open_panel():
                     try:
                         webbrowser.open(get_base_url() + "/")

@@ -358,5 +358,45 @@ class TestReadBody(unittest.TestCase):
         self.assertEqual(self._handler({"Content-Length": "999999999"})._read_body(), b'{"a": 1}')
 
 
+class TestAutoOpenLatch(unittest.TestCase):
+    """Пачка запросов при блокировке не должна открывать много окон."""
+
+    def setUp(self):
+        proxy.reset_auto_open_latch()
+
+    def tearDown(self):
+        proxy.reset_auto_open_latch()
+
+    def test_only_first_claim_wins(self):
+        self.assertTrue(proxy.claim_auto_open())
+        for _ in range(50):
+            self.assertFalse(proxy.claim_auto_open())
+
+    def test_reset_allows_opening_again(self):
+        self.assertTrue(proxy.claim_auto_open())
+        self.assertFalse(proxy.claim_auto_open())
+        proxy.reset_auto_open_latch()
+        self.assertTrue(proxy.claim_auto_open())
+
+    def test_concurrent_claims_only_one_wins(self):
+        import threading
+
+        proxy.reset_auto_open_latch()
+        results = []
+        lock = threading.Lock()
+
+        def worker():
+            got = proxy.claim_auto_open()
+            with lock:
+                results.append(got)
+
+        threads = [threading.Thread(target=worker) for _ in range(30)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(results.count(True), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
