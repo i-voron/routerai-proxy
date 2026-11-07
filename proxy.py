@@ -232,6 +232,10 @@ def price_monitor_loop() -> None:
             else:
                 if _monitor_prev_blocked is True:
                     write_log("Монитор", "Проверка цен возобновлена.")
+                    # Блокировку сняли, в том числе правкой proxy_settings.json
+                    # вручную: разрешаем снова открыть панель при следующем
+                    # подорожании, иначе защёлка останется взведённой.
+                    reset_auto_open_latch()
                 _monitor_prev_blocked = False
 
                 if model and provider and frozen:
