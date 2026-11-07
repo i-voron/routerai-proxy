@@ -915,6 +915,19 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    def handle_one_request(self):
+        """Гасим обрыв соединения клиентом на уровне запроса.
+
+        socketserver печатает полный трейсбек на любое исключение, вышедшее
+        из метода запроса. Обрыв соединения клиентом — штатное событие
+        (WinError 10053 на Windows, ConnectionResetError на Linux), поэтому
+        не даём ему всплывать до socketserver.
+        """
+        try:
+            super().handle_one_request()
+        except ConnectionError:
+            self.close_connection = True
+
     def do_GET(self):
         parsed = urlparse(self.path)
         # Очищаем путь от лишних слэшей на конце для стабильного роутинга
@@ -981,7 +994,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
             self.end_headers()
             self.wfile.write(html.encode("utf-8"))
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
         except Exception as e:
             write_log("Прокси", f"Ошибка при отображении главной страницы: {e}")
@@ -993,7 +1006,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(mock_models).encode("utf-8"))
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
 
     def handle_api_toggle_auto_open(self):
@@ -1010,7 +1023,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok", "auto_open_on_block": enabled}).encode("utf-8"))
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
         except Exception as e:
             try:
@@ -1018,7 +1031,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
                 pass
 
     def handle_api_toggle_logging(self):
@@ -1033,7 +1046,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok", "logging_enabled": enabled}).encode("utf-8"))
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
         except Exception as e:
             try:
@@ -1041,7 +1054,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
                 pass
 
     def handle_api_cache_date(self):
@@ -1051,7 +1064,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
             self.end_headers()
             self.wfile.write(json.dumps({"cache_date": get_cache_info()}, ensure_ascii=False).encode("utf-8"))
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
         except Exception:
             pass
@@ -1072,7 +1085,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             update_settings(lambda s: s.__setitem__("opencode_config_allow_replace", enabled))
             write_log("Прокси", f"Разрешение на правку конфига OpenCode: {'включено' if enabled else 'выключено'}")
             self._send_json({"status": "ok", "allow_replace": enabled})
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
         except Exception as e:
             self._send_json({"status": "error", "error": str(e)}, 500)
@@ -1086,7 +1099,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             update_settings(lambda s: s.__setitem__("opencode_config_path", path))
             write_log("Прокси", f"Путь к конфигу OpenCode: {path or '(очищен)'}")
             self._send_json({"status": "ok", "path": path})
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
         except Exception as e:
             self._send_json({"status": "error", "error": str(e)}, 500)
@@ -1159,7 +1172,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "backup": backup_path,
                 "path": cfg_path
             })
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
         except Exception as e:
             write_log("Прокси", f"Ошибка обновления конфига OpenCode: {e}")
@@ -1220,7 +1233,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "error", "error": str(e)}).encode("utf-8"))
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
                 pass
 
     def handle_api_catalog(self):
@@ -1248,7 +1261,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
             self.end_headers()
             self.wfile.write(catalog_html.encode("utf-8"))
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
         except Exception as e:
             try:
@@ -1256,7 +1269,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode("utf-8"))
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
                 pass
 
     def handle_price_changes(self):
@@ -1277,7 +1290,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "price_changes": changes,
                 "frozen_prices": frozen_prices
             }, ensure_ascii=False).encode("utf-8"))
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
         except Exception as e:
             try:
@@ -1285,7 +1298,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
                 pass
 
     def handle_api_select(self):
@@ -1387,7 +1400,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "cache_write": None if cache_write is None else f"{cache_write * 1000000:.2f}"
                 }
             }, ensure_ascii=False).encode("utf-8"))
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
         except Exception as e:
             try:
@@ -1395,7 +1408,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": f"Ошибка при выборе провайдера: {e}"}, ensure_ascii=False).encode("utf-8"))
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
                 pass
 
     def handle_select(self):
@@ -1449,7 +1462,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(b"<script>window.location.href='/';</script>")
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
 
     def handle_save_filters(self):
@@ -1469,7 +1482,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(b"<script>window.location.href='/';</script>")
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
 
     def handle_api_save_filters(self):
@@ -1490,7 +1503,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
         except Exception as e:
             try:
@@ -1498,7 +1511,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
                 pass
 
     def send_openai_error(self, status, message, err_type="invalid_request_error", code=None, add_hint=True):
@@ -1520,7 +1533,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             pass
 
     def _read_body(self, max_bytes: int = MAX_BODY_BYTES) -> bytes:
@@ -1603,6 +1616,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         msg_count = len(incoming_data.get("messages", []))
         write_log("Прокси", f"Запрос от клиента: model='{req_model}', сообщений={msg_count} -> подмена на '{final_model}', stream={incoming_data.get('stream', False)}")
 
+        # Заголовки можно отправить только один раз. Если клиент оборвёт
+        # соединение уже во время стриминга, ответ 500 в поток уже не дописать.
+        headers_sent = False
         try:
             req = urllib.request.Request(
                 f"{ROUTERAI_DOMAIN}/api/v1/chat/completions",
@@ -1620,6 +1636,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_response(resp.status)
                 self.send_header("Content-Type", ctype)
                 self.end_headers()
+                headers_sent = True
                 total_bytes = 0
                 while True:
                     chunk = resp.read(1024)
@@ -1645,13 +1662,25 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 except Exception:
                     msg = f"RouterAI вернул {e.code}: {e.reason}"
                 self.send_openai_error(e.code, msg, err_type="api_error", code=str(e.code))
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
                 pass
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        except ConnectionError:
+            # Клиент (OpenCode, браузер) закрыл соединение. На Windows это
+            # ConnectionAbortedError (WinError 10053), на Linux — чаще
+            # ConnectionResetError/BrokenPipeError. Штатное событие, не ошибка
+            # сервера, поэтому трейсбек в консоль печатать не нужно.
+            if headers_sent:
+                write_log("Прокси", "Клиент прервал соединение во время стриминга")
+            else:
+                write_log("Прокси", "Клиент прервал соединение до начала ответа")
         except Exception as e:
             write_log("Прокси", f"Ошибка проксирования: {e}")
-            self.send_openai_error(500, f"Ошибка при проксировании запроса: {e}", err_type="api_error", code="proxy_error")
+            if headers_sent:
+                # Статус и заголовки уже ушли клиенту: формировать ответ с ошибкой
+                # поздно, иначе JSON ошибки приклеится к уже начатому телу ответа.
+                write_log("Прокси", "Заголовки уже отправлены, ответ с ошибкой не формируется")
+            else:
+                self.send_openai_error(500, f"Ошибка при проксировании запроса: {e}", err_type="api_error", code="proxy_error")
 
 
 def prompt_open_browser() -> None:
